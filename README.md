@@ -55,10 +55,20 @@ npm run dist
 ```
 
 Chạy test logic: `npm test`.
-Admin mặc định tắt khi chạy từ mã nguồn; phiên phát triển có thể chủ động bật bằng biến môi trường
-`PIXEL_GARDEN_ADMIN=1`. Bản đóng gói luôn tắt Admin.
+Nút Admin 🛠 chỉ hiện trên máy của người phát triển: chạy `scripts\tao-khoa-admin.cmd` một lần trên máy đó
+(tạo khoá bí mật ở `%USERPROFILE%\.vuon-pixel-admin\` – không nằm trong repo – và ghi `adminPublicKey` vào
+`package.json`), rồi phát hành bản mới. Máy khác, kể cả khi chép file khoá sang, không bật được Admin.
 
-## Chơi cùng bạn (LAN hoặc Internet)
+## Chơi cùng bạn (nhóm Supabase)
+
+Cách chính: **nhóm chơi chung qua Supabase** – cài 1 lần theo [`supabase/README.md`](supabase/README.md).
+Trong game mở **🌐 Bạn bè & chat › 🌱 Tạo nhóm mới**, gửi riêng **mã nhóm** `VP-…` cho đồng nghiệp; họ dán vào
+**Vào nhóm**. Bấm **Thăm vườn** cạnh tên một người: thanh vườn hiện vườn của họ, bấm cây để **tưới hộ**, hoặc
+**hái trộm hoa đang nở** khi chủ vắng mặt / đã tắt game. Chat nhóm được mã hoá bằng mã nhóm, lưu 7 ngày.
+
+Khi `package.json` chưa có cấu hình `supabase`, game dùng cách cũ bên dưới.
+
+### Cách cũ: phòng LAN / Internet
 
 Mở **🌐 Bạn bè & chat** ở menu bên phải. Chủ phòng chọn một trong hai:
 

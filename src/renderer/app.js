@@ -13,7 +13,7 @@
   let sub = null; // tab con của panel
   let panelArg = null;
   let visiting = null; // id người chơi đang thăm vườn (thanh vườn hiện vườn của họ)
-  let chatScroll = null; let chatDraft = '';
+  let chatScroll = null; let chatDraft = ''; let chatKey = '';
   let lanInvite = '';
   let confirmTap = null; // {key, until}
   const GARDEN_SCALE = 2.5; // số px màn hình cho 1 pixel sprite trong vườn
@@ -168,11 +168,14 @@
   }
   function buildVisitView() {
     const p = L && L.role && (L.players || []).find((x) => x.id === visiting);
-    if (!p || !p.garden || p.status === 'Mất kết nối') {
+    // Nhóm Supabase: thăm được cả khi chủ ngoại tuyến (vườn lưu trên máy chủ); LAN/phòng: chủ phải còn kết nối.
+    const group = L && L.mode === 'group';
+    if (!p || (!group && (!p.garden || p.status === 'Mất kết nối'))) {
       visiting = null; document.body.classList.remove('visiting');
-      toast('Chủ vườn đã mất kết nối – quay về vườn của bạn.', true);
+      toast(p ? 'Chủ vườn đã mất kết nối – quay về vườn của bạn.' : 'Người này không còn trong nhóm.', true);
       return V;
     }
+    if (!p.garden) return { visit: true, loading: true, owner: p, now: Date.now(), slots: [], house: null, scene: null, pet: null };
     const g = p.garden;
     return {
       visit: true, owner: p, now: Date.now(),
@@ -189,12 +192,14 @@
     document.body.classList.toggle('visiting', !!G2.visit);
     if (!G2.visit) { if (bn) bn.remove(); return; }
     if (!bn) { bn = document.createElement('div'); bn.id = 'visit-banner'; $('#garden').appendChild(bn); }
-    const away = G2.owner.status === 'Vắng mặt';
+    const st = G2.owner.status;
     bn.innerHTML = '';
     const t = document.createElement('span');
-    t.textContent = `🏡 Vườn của ${G2.owner.name} · ${away ? '💤 chủ vắng mặt: tưới hộ hoặc hái hoa đang nở' : '🟢 chủ đang chơi: chỉ tưới hộ được'}`;
+    t.textContent = `🏡 Vườn của ${G2.owner.name} · ${G2.loading ? '⏳ đang tải vườn…'
+      : st === 'Đang chơi' ? '🟢 chủ đang chơi: chỉ tưới hộ được'
+        : `${st === 'Ngoại tuyến' ? '⚫ chủ ngoại tuyến' : '💤 chủ vắng mặt'}: tưới hộ hoặc hái hoa đang nở`}`;
     const back = document.createElement('button'); back.textContent = '⟵ Về vườn mình';
-    back.onclick = () => { visiting = null; Sound.play('open'); renderAll(); };
+    back.onclick = () => { visiting = null; Sound.play('open'); if (L.mode === 'group') api.lan({ type: 'watch', id: null }); renderAll(); };
     bn.append(t, back);
   }
 
@@ -202,7 +207,7 @@
     const o = gv().owner;
     let kind = null;
     if (s.stage === 'bloom') {
-      if (o.status !== 'Vắng mặt') { toast('Chỉ hái được hoa khi chủ vườn Vắng mặt (đã thu gọn app).', true); Sound.play('error'); return; }
+      if (o.status === 'Đang chơi' || o.status === 'Mất kết nối') { toast('Chỉ hái được hoa khi chủ vườn vắng mặt hoặc đã tắt game.', true); Sound.play('error'); return; }
       kind = 'steal';
     } else if (s.stage !== 'empty' && s.stage !== 'dead') kind = 'water';
     if (!kind) { toast('Ô này không có cây để tưới.', true); return; }
@@ -634,6 +639,57 @@
     return r;
   }
 
+  function fillChat(history) {
+    chatKey = (L.messages || []).map((m) => m.id).join(',');
+    history.innerHTML = '';
+    for (const m of L.messages || []) {
+      const p = document.createElement('p');
+      const b = document.createElement('b'); b.textContent = `${m.by}: `;
+      const t = document.createElement('span'); t.textContent = m.text;
+      p.append(b, t); history.appendChild(p);
+    }
+  }
+
+  // Khi đang gõ (ô nhập có focus) bảng không vẽ lại cả trang, nhưng khung chat vẫn phải nhận tin mới.
+  function refreshChatOnly() {
+    const h = $('#panel-body .lan-chat-history');
+    if (!h) return;
+    const key = (L.messages || []).map((m) => m.id).join(',');
+    if (key === chatKey) return;
+    chatKey = key;
+    const atBottom = h.scrollHeight - h.scrollTop - h.clientHeight < 12;
+    const top = h.scrollTop;
+    fillChat(h);
+    h.scrollTop = atBottom ? h.scrollHeight : top;
+  }
+
+  function renderGroupControls(controls) {
+    if (!L.online) return;
+    if (!L.role) {
+      const make = document.createElement('div'); make.className = 'lan-row';
+      const create = document.createElement('button'); create.className = 'primary'; create.textContent = '🌱 Tạo nhóm mới';
+      create.onclick = () => lanAct({ type: 'createGroup' });
+      make.append(create, 'Tạo xong, gửi riêng mã nhóm cho đồng nghiệp.'); controls.appendChild(make);
+      const join = document.createElement('div'); join.className = 'lan-row';
+      const code = document.createElement('input'); code.placeholder = 'Dán mã nhóm VP-XXXX-XXXX-XXXX-XXXX-XXXX'; code.className = 'lan-code';
+      const go = document.createElement('button'); go.textContent = 'Vào nhóm'; go.onclick = () => lanAct({ type: 'joinGroup', code: code.value });
+      join.append(code, go); controls.appendChild(join);
+      return;
+    }
+    const row = document.createElement('div'); row.className = 'lan-row';
+    const away = document.createElement('span'); away.className = 'lan-presence';
+    away.textContent = L.away ? '💤 Vắng mặt: vườn đang thu gọn' : '🟢 Đang chơi: vườn đang mở';
+    const leave = document.createElement('button'); leave.textContent = 'Rời nhóm';
+    leave.onclick = () => { if (!needConfirm('leave-group', 'Bấm lần nữa để rời nhóm (cần mã nhóm để vào lại).')) lanAct({ type: 'leave' }); };
+    row.append(away, leave); controls.appendChild(row);
+    const share = document.createElement('div'); share.className = 'lan-row';
+    const field = document.createElement('input'); field.className = 'lan-code'; field.readOnly = true; field.value = L.groupCode || '';
+    field.title = 'Mã nhóm – chỉ gửi riêng cho người muốn mời'; field.onclick = () => field.select();
+    const copy = document.createElement('button'); copy.textContent = '📋 Sao chép mã nhóm';
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(L.groupCode || ''); toast('Đã sao chép mã nhóm.'); } catch (_) { field.select(); toast('Bấm Ctrl+C để sao chép.'); } };
+    share.append('Mã nhóm:', field, copy); controls.appendChild(share);
+  }
+
   function renderLan(body) {
     const shell = document.createElement('div'); shell.className = 'lan-layout';
     body.appendChild(shell);
@@ -644,13 +700,17 @@
     head.querySelector('input').value = L.alias;
     head.querySelector('button').onclick = () => lanAct({ type: 'alias', name: head.querySelector('input').value });
     const note = document.createElement('p'); note.className = 'meta';
-    note.textContent = L.online
-      ? 'Chỉ người có mã mời mới vào được phòng. Dữ liệu được mã hoá đầu-cuối qua máy trung chuyển Internet.'
-      : 'Bản này chưa cấu hình máy trung chuyển Internet nên chưa mở phòng chơi chung được.';
+    note.textContent = L.mode === 'group'
+      ? (L.online ? 'Ai có mã nhóm mới vào được nhóm. Chat được mã hoá bằng mã nhóm; vườn thăm được cả khi chủ đã tắt game.'
+        : 'Bản này chưa cấu hình máy chủ nhóm (Supabase) nên chưa chơi chung được.')
+      : L.online
+        ? 'Chỉ người có mã mời mới vào được phòng. Dữ liệu được mã hoá đầu-cuối qua máy trung chuyển Internet.'
+        : 'Bản này chưa cấu hình máy trung chuyển Internet nên chưa mở phòng chơi chung được.';
     controls.appendChild(note);
     if (L.error) { const e = document.createElement('p'); e.className = 'lan-error'; e.textContent = L.error; controls.appendChild(e); }
 
-    if (!L.role) {
+    if (L.mode === 'group') renderGroupControls(controls);
+    else if (!L.role) {
       // Phòng LAN đã ẩn (mạng công ty chặn kết nối giữa các máy) – chỉ dùng phòng Internet.
       if (!L.online) return;
       const net = document.createElement('div'); net.className = 'lan-row';
@@ -699,9 +759,13 @@
         const friend = document.createElement('button'); friend.textContent = friends.has(p.id) ? '★ Bỏ bạn' : '☆ Kết bạn';
         friend.onclick = () => lanAct({ type: 'friend', id: p.id });
         const visit = document.createElement('button'); visit.textContent = visiting === p.id ? '🏡 Đang thăm' : 'Thăm vườn';
-        visit.disabled = !p.garden || p.status === 'Mất kết nối';
+        visit.disabled = L.mode === 'group' ? false : !p.garden || p.status === 'Mất kết nối';
         visit.title = 'Thanh vườn sẽ hiện vườn của người này: bấm cây để tưới hộ, hoặc hái hoa đang nở khi chủ vắng mặt.';
-        visit.onclick = () => { visiting = p.id; Sound.play('open'); closePanel(); renderAll(); };
+        visit.onclick = () => {
+          visiting = p.id; Sound.play('open');
+          if (L.mode === 'group') api.lan({ type: 'watch', id: p.id });
+          closePanel(); renderAll();
+        };
         row.append(label, friend, visit);
         if (L.role === 'host' && p.id !== 'host') {
           const revoke = document.createElement('button'); revoke.textContent = 'Chặn';
@@ -715,14 +779,9 @@
     }
 
     const chat = document.createElement('section'); chat.className = 'lan-chat';
-    const title = document.createElement('h3'); title.textContent = 'Chat phòng'; chat.appendChild(title);
+    const title = document.createElement('h3'); title.textContent = L.mode === 'group' ? 'Chat nhóm' : 'Chat phòng'; chat.appendChild(title);
     const history = document.createElement('div'); history.className = 'lan-chat-history';
-    for (const m of L.messages || []) {
-      const p = document.createElement('p');
-      const b = document.createElement('b'); b.textContent = `${m.by}: `;
-      const t = document.createElement('span'); t.textContent = m.text;
-      p.append(b, t); history.appendChild(p);
-    }
+    fillChat(history);
     chat.appendChild(history);
     const form = document.createElement('form'); form.className = 'lan-row';
     const input = document.createElement('input'); input.maxLength = 300; input.placeholder = L.role ? 'Nhắn cho mọi người trong phòng…' : 'Vào phòng để chat'; input.disabled = !L.role;
@@ -1455,7 +1514,7 @@
   });
   api.onLanState((v) => {
     L = v;
-    if (panel === 'lan') renderPanel();
+    if (panel === 'lan') { renderPanel(); refreshChatOnly(); }
     if (visiting) { if (!L.role) visiting = null; renderVisitBanner(); renderSlots(); renderHouse(); renderScene(); }
   });
   api.onLayout(({ mode: m, position }) => {

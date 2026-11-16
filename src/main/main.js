@@ -7,7 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
 const {
-  app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, Notification, globalShortcut, safeStorage,
+  app, BrowserWindow, net, ipcMain, screen, Tray, Menu, nativeImage, Notification, globalShortcut, safeStorage,
 } = require('electron');
 
 const C = require('../core/catalog');
@@ -15,7 +15,8 @@ const G = require('../core/garden');
 const store = require('../core/store');
 const D = require('../core/decor');
 const { LanRoom, publicGarden } = require('./lan');
-const adminAllowed = require('./admin-gate');
+const { GroupRoom, validSupabase } = require('./group');
+const { verifyAdmin, KEY_FILE_NAME } = require('./admin-gate');
 
 const ROOT = path.join(__dirname, '..', '..');
 const BAR_H = 178;
@@ -29,6 +30,7 @@ let win = null;
 let tray = null;
 let state = null;
 let saveFile = '';
+let saveCipher = null;
 let mode = 'bar'; // collapsed | bar | panel
 let dirty = false;
 let lastTodo = -1;
@@ -36,7 +38,10 @@ let lan = null;
 let lanFile = '';
 let lanSaveQueue = Promise.resolve();
 const DEV = !app.isPackaged; // bản chạy từ mã nguồn: tự tải lại khi sửa code
-const ADMIN = adminAllowed(app.isPackaged);
+// Admin chỉ bật trên máy có file khoá do scripts\tao-khoa-admin.cmd tạo (ký bằng khoá bí mật của người phát triển).
+const ADMIN = verifyAdmin(require('../../package.json').adminPublicKey, path.join(app.getPath('appData'), KEY_FILE_NAME));
+// Bản chạy từ mã nguồn (yarn start, có thể bật Admin) dùng thư mục dữ liệu riêng, không đụng save của bản phát hành.
+if (DEV) app.setPath('userData', path.join(app.getPath('appData'), 'Vuon Pixel (dev)'));
 
 if (!app.requestSingleInstanceLock()) {
   console.log('Vườn Pixel đang chạy sẵn (xem biểu tượng ở khay hệ thống) – bản này tự thoát. Thoát bản cũ trước rồi chạy lại.');
@@ -104,7 +109,7 @@ function push() {
 
 function persist() {
   try {
-    store.save(saveFile, state);
+    store.save(saveFile, state, { cipher: saveCipher });
     dirty = false;
   } catch (e) {
     console.error('Không lưu được game:', e);
@@ -142,6 +147,22 @@ function handleLanVisit({ kind, slot, by, away }) {
   persist(); // Pet có thể chặn trộm và ngủ dù kết quả là thất bại.
   push(); updateTray();
   return result;
+}
+
+// Nhóm Supabase: ảnh chụp vườn gửi lên máy chủ = phần hiển thị + phần thưởng/khả năng chặn trộm từng ô.
+function groupGarden() {
+  const pub = publicGarden(G.view(state));
+  const rg = G.remoteGuard(state);
+  pub.slots.forEach((s, i) => Object.assign(s, rg.slots[i] || {}));
+  pub.guard = rg.guard;
+  return pub;
+}
+
+// Lượt tưới hộ / hái trộm máy chủ nhóm đã xử lý (có thể lúc mình tắt máy) → áp vào vườn.
+function applyGroupEvents(events) {
+  G.advance(state, Date.now());
+  for (const ev of events) G.applyRemoteVisit(state, ev);
+  persist(); push(); updateTray();
 }
 
 function applyLanReward(loot) {
@@ -367,8 +388,14 @@ function watchSource() {
 
 app.whenReady().then(async () => {
   app.setAppUserModelId('vn.pixelgarden.app');
-  saveFile = path.join(app.getPath('userData'), 'save.json');
-  state = store.load(saveFile);
+  // Bản này dùng save mã hoá (save.dat): bản cũ lưu save.json dạng chữ, người chơi đã sửa tay được chỉ số
+  // → mọi người bắt đầu lại, chỉ giữ Cài đặt. Khoá do Windows (DPAPI) giữ cho đúng tài khoản + app.
+  const userData = app.getPath('userData');
+  saveCipher = safeStorage.isEncryptionAvailable()
+    ? { encrypt: (t) => safeStorage.encryptString(t), decrypt: (b) => safeStorage.decryptString(b) }
+    : null;
+  saveFile = path.join(userData, saveCipher ? 'save.dat' : 'save.json');
+  state = store.load(saveFile, Date.now(), { cipher: saveCipher, legacy: saveCipher ? path.join(userData, 'save.json') : null });
   G.advance(state, Date.now());
   lanFile = path.join(app.getPath('userData'), 'lan.sec');
   let lanConfig = {};
@@ -377,11 +404,22 @@ app.whenReady().then(async () => {
   // Máy trung chuyển phòng Internet: "relayUrl" trong package.json (đặt sau khi deploy relay/),
   // có thể ghi đè khi phát triển bằng biến môi trường PIXEL_GARDEN_RELAY.
   const relayUrl = process.env.PIXEL_GARDEN_RELAY || require('../../package.json').relayUrl || '';
-  lan = new LanRoom({ config: lanConfig, saveConfig: saveLanConfig, relayUrl,
-    getGarden: () => publicGarden(G.view(state)), handleVisit: handleLanVisit, applyReward: applyLanReward,
-    changed: (v) => { if (win) win.webContents.send('lan-state', v); },
-  });
-  lan.error = lanError;
+  // Nhóm chơi chung Supabase: "supabase": { "url", "anonKey" } trong package.json (xem supabase/README.md),
+  // hoặc biến môi trường PIXEL_GARDEN_SUPABASE_URL / PIXEL_GARDEN_SUPABASE_KEY khi chạy thử.
+  const pkgSb = require('../../package.json').supabase || {};
+  const supabase = { url: process.env.PIXEL_GARDEN_SUPABASE_URL || pkgSb.url || '', anonKey: process.env.PIXEL_GARDEN_SUPABASE_KEY || pkgSb.anonKey || '' };
+  const changed = (v) => { if (win) win.webContents.send('lan-state', v); };
+  if (validSupabase(supabase)) {
+    // net.fetch dùng mạng của Chromium → tự đi qua proxy của Windows giống trình duyệt.
+    lan = new GroupRoom({ config: lanConfig, saveConfig: saveLanConfig, supabase, fetch: (u, o) => net.fetch(u, o),
+      getGarden: groupGarden, applyEvents: applyGroupEvents, applyReward: applyLanReward, changed });
+    lan.error = lanError;
+    if (!lanError) lan.start();
+  } else {
+    lan = new LanRoom({ config: lanConfig, saveConfig: saveLanConfig, relayUrl,
+      getGarden: () => publicGarden(G.view(state)), handleVisit: handleLanVisit, applyReward: applyLanReward, changed });
+    lan.error = lanError;
+  }
 
   ipcMain.handle('init', () => ({
     catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
@@ -407,6 +445,17 @@ app.whenReady().then(async () => {
     if (!win || e.sender !== win.webContents || !a || typeof a !== 'object') return { ok: false, msg: 'Yêu cầu LAN không hợp lệ.' };
     if (lanError) return { ok: false, msg: lanError };
     try {
+      if (lan instanceof GroupRoom) {
+        if (a.type === 'createGroup') return await lan.createGroup();
+        if (a.type === 'joinGroup') return await lan.joinGroup(a.code);
+        if (a.type === 'leave') return await lan.leave();
+        if (a.type === 'alias') return await lan.setAlias(a.name);
+        if (a.type === 'friend') return await lan.friend(a.id);
+        if (a.type === 'chat') return await lan.chat(a.text);
+        if (a.type === 'watch') return lan.watch(a.id);
+        if (a.type === 'visit') return await lan.visit(a.target, a.kind, a.slot);
+        return { ok: false, msg: 'Hành động nhóm không hợp lệ.' };
+      }
       if (a.type === 'host') return { ok: false, msg: 'Phòng LAN đã tắt, hãy dùng phòng Internet.' };
       if (a.type === 'hostOnline') return await lan.hostOnline();
       if (a.type === 'invite') return await lan.invite();

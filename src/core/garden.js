@@ -821,6 +821,64 @@ function visitWater(state, idx, by) {
   return water(state, idx, by);
 }
 
+// ---------------------------------------------------------------- nhóm chơi chung (máy chủ Supabase)
+
+/**
+ * Phần vườn máy chủ nhóm cần để tự xử lý hái trộm khi chủ vườn tắt máy:
+ * tiền/EXP kẻ trộm nhận cho từng hoa đang nở, tỉ lệ đồ trang trí chặn trộm, và pet canh vườn.
+ */
+function remoteGuard(state, now = Date.now()) {
+  const slots = state.slots.map((slot) => {
+    const p = slot && slot.plant;
+    const guard = slot ? Math.round(mods(slot).guard * 100) / 100 : 0;
+    if (!p || p.dead || !p.bloomed || p.faded) return { loot: null, guard };
+    const v = harvestValue(state, slot);
+    return { loot: { money: Math.round(v.money * C.RULES.stealShare), exp: Math.round(v.exp * C.RULES.stealShare) }, guard };
+  });
+  const pet = petInfo(state, now);
+  const st = pet && state.pets.status[pet.id];
+  return { slots, guard: { pet: !!pet, petSleepUntil: st ? st.sleepUntil || 0 : 0, petSleepMs: houseLevel(state).sleepMin * 60000 } };
+}
+
+/**
+ * Áp 1 lượt thăm vườn máy chủ nhóm đã quyết định (chủ vườn có thể đang tắt máy lúc đó).
+ * ev = { kind: 'water'|'steal', result: 'ok'|'pet'|'guard', slot, species, by, at }
+ */
+function applyRemoteVisit(state, ev, now = Date.now()) {
+  const by = String((ev && ev.by) || 'Người chơi').slice(0, 24);
+  const idx = Number(ev && ev.slot);
+  const slot = getSlot(state, idx);
+  const p = slot && slot.plant;
+  const sp = C.SPECIES_BY_ID[ev && ev.species];
+  const spName = sp ? sp.name : 'cây';
+  if (ev.kind === 'water') {
+    if (ev.result === 'ok' && p && p.species === ev.species) water(state, idx, by);
+    return;
+  }
+  if (ev.kind !== 'steal') return;
+  if (ev.result === 'pet') {
+    const pet = petInfo(state, now);
+    if (!pet) return;
+    const st = state.pets.status[pet.id] || (state.pets.status[pet.id] = { sleepUntil: 0, blocks: 0 });
+    const mins = houseLevel(state).sleepMin;
+    st.sleepUntil = Math.max(st.sleepUntil || 0, (Number(ev.at) || now) + mins * 60000);
+    st.blocks = (st.blocks || 0) + 1;
+    log(state, 'guarded', `${pet.name} đã đuổi ${by} khỏi ${spName} (ô ${idx + 1})! Pet về nhà ngủ ${mins} phút.`, { by });
+    return;
+  }
+  if (ev.result === 'guard') {
+    log(state, 'guarded', `${by} định hái trộm ${spName} (ô ${idx + 1}) nhưng bị đuổi đi!`);
+    return;
+  }
+  if (ev.result !== 'ok') return;
+  if (p && !p.dead && p.bloomed && p.species === ev.species) {
+    slot.theftMark = { by, at: Number(ev.at) || now, species: ev.species };
+    afterPick(slot);
+  }
+  state.stats.stolenFromMe += 1;
+  log(state, 'stolen', `${by} đã hái trộm ${spName} ở ô ${idx + 1}!`, { by });
+}
+
 // ---------------------------------------------------------------- hiển thị
 
 function stageOf(p) {
@@ -875,4 +933,5 @@ module.exports = {
   createState, migrate, advance, view, stageOf, decorFx,
   plantSeed, water, waterAll, harvest, fertilize, removePlant, clearTheft,
   buy, equipScene, buySlot, unlock, spinWheel, ackSpin, wheelPool, upgradeHouse, placeHouseDecor, houseLevel, mods, claimDaily, dailyAvailable, dayKey, placePot, placeDecor, setPet, petInfo, gainExp, fastForward, admin, visitSteal, visitWater, harvestValue,
+  remoteGuard, applyRemoteVisit,
 };

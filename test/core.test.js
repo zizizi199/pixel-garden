@@ -8,6 +8,7 @@ const S = require('../src/core/schedule');
 const G = require('../src/core/garden');
 const C = require('../src/core/catalog');
 const store = require('../src/core/store');
+const crypto = require('crypto');
 
 // Thứ Hai 16/11/2026 (giờ địa phương)
 // gieo hạt cho test: tự cấp hạt + mở khoá giống
@@ -373,5 +374,35 @@ test('phần thưởng vòng quay chờ xem vẫn còn sau khi lưu và mở l�
     const target = fs.realpathSync(dir);
     assert.ok(target.startsWith(tempRoot + path.sep), 'thư mục test phải nằm trong thư mục tạm');
     fs.rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('save mã hoá: sửa file thì bị làm mới; bản mới bỏ chỉ số của save.json cũ, chỉ giữ Cài đặt', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pixel-garden-save-'));
+  const key = crypto.randomBytes(32);
+  const cipher = { // giả lập safeStorage: AES-GCM có xác thực như DPAPI
+    encrypt: (t) => { const iv = crypto.randomBytes(12); const c = crypto.createCipheriv('aes-256-gcm', key, iv); const ct = Buffer.concat([c.update(t, 'utf8'), c.final()]); return Buffer.concat([iv, c.getAuthTag(), ct]); },
+    decrypt: (b) => { const d = crypto.createDecipheriv('aes-256-gcm', key, b.subarray(0, 12)); d.setAuthTag(b.subarray(12, 28)); return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8'); },
+  };
+  try {
+    const legacy = path.join(dir, 'save.json');
+    const old = G.createState();
+    old.money = 9999999; old.level = 99; old.settings.music = true;
+    fs.writeFileSync(legacy, JSON.stringify(old));
+    const file = path.join(dir, 'save.dat');
+    const fresh = store.load(file, Date.now(), { cipher, legacy });
+    assert.equal(fresh.money, G.createState().money, 'tiền về mặc định');
+    assert.equal(fresh.level, 1);
+    assert.equal(fresh.settings.music, true, 'giữ cài đặt');
+    fresh.money = 123;
+    store.save(file, fresh, { cipher });
+    assert.ok(!fs.readFileSync(file).toString('latin1').includes('"money"'), 'file không đọc/sửa bằng tay được');
+    assert.equal(store.load(file, Date.now(), { cipher }).money, 123);
+    const buf = fs.readFileSync(file); buf[buf.length - 3] ^= 1; fs.writeFileSync(file, buf);
+    const reset = store.load(file, Date.now(), { cipher });
+    assert.equal(reset.money, G.createState().money, 'file bị sửa → vườn mới');
+    assert.ok(fs.readdirSync(dir).some((f) => f.startsWith('save.dat.broken-')));
+  } finally {
+    fs.rmSync(fs.realpathSync(dir), { recursive: true, force: true });
   }
 });
