@@ -7,6 +7,9 @@ const crypto = require('node:crypto');
 
 const PORT = 47321;
 const MAX_BODY = 48 * 1024;
+const MAX_REPLY = 512 * 1024; // phản hồi của chủ phòng (danh sách vườn + 50 tin chat) có thể lớn hơn yêu cầu
+const CLOCK_SKEW = 10 * 60000; // chấp nhận đồng hồ hai máy lệch tối đa 10 phút
+const VIRTUAL_NIC = /vethernet|wsl|hyper-v|virtualbox|vmware|docker|loopback|vpn|tap|tun|zerotier|tailscale|hamachi/i;
 const AAD = Buffer.from('pixel-garden-lan-v1');
 const cleanName = (s) => String(s || '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 24) || 'Người chơi';
 const cleanText = (s) => String(s || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim().slice(0, 300);
@@ -18,18 +21,24 @@ function privateIP(ip) {
   return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+// IPv4 nội bộ của máy, xếp card mạng thật (Wi-Fi/Ethernet) lên trước, card ảo và 127.x xuống cuối.
 function addresses() {
-  const all = Object.values(os.networkInterfaces()).flat().filter((x) => x && x.family === 'IPv4' && privateIP(x.address));
-  return [...new Set(all.map((x) => x.address))];
+  const rank = (name, ip) => (ip.startsWith('127.') ? 9 : 0) + (VIRTUAL_NIC.test(name) ? 4 : 0)
+    + (ip.startsWith('192.168.') ? 0 : ip.startsWith('10.') ? 1 : 2);
+  const all = Object.entries(os.networkInterfaces()).flatMap(([name, list]) => (list || [])
+    .filter((x) => x && (x.family === 'IPv4' || x.family === 4) && privateIP(x.address)).map((x) => ({ ip: x.address, r: rank(name, x.address) })));
+  all.sort((a, b) => a.r - b.r);
+  return [...new Set(all.map((x) => x.ip))];
 }
 
 function parseInvite(code) {
-  const parts = String(code || '').trim().split('|');
-  if (parts.length !== 5 || parts[0] !== 'PG1' || !privateIP(parts[1]) || !/^\d{1,5}$/.test(parts[2])
+  const parts = String(code || '').replace(/\s+/g, '').split('|');
+  const ips = parts.length === 5 ? parts[1].split(',').filter(Boolean) : [];
+  if (parts.length !== 5 || parts[0] !== 'PG1' || !ips.length || ips.length > 4 || !ips.every(privateIP) || !/^\d{1,5}$/.test(parts[2])
     || Number(parts[2]) < 1 || Number(parts[2]) > 65535 || !/^[A-Za-z0-9_-]{8,32}$/.test(parts[3])) throw new Error('Mã mời LAN không hợp lệ.');
   const key = Buffer.from(parts[4], 'base64url');
   if (key.length !== 32 || key.toString('base64url') !== parts[4]) throw new Error('Khoá lời mời không hợp lệ.');
-  return { ip: parts[1], port: Number(parts[2]), id: parts[3], key: parts[4] };
+  return { ip: ips[0], ips, port: Number(parts[2]), id: parts[3], key: parts[4] };
 }
 
 function seal(key, data) {
@@ -41,19 +50,19 @@ function seal(key, data) {
   return { iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), data: payload.toString('base64url') };
 }
 
-function open(key, envelope) {
+function open(key, envelope, max = MAX_BODY) {
   if (!envelope || typeof envelope !== 'object') throw new Error('Dữ liệu LAN không hợp lệ.');
   const iv = Buffer.from(envelope.iv || '', 'base64url');
   const tag = Buffer.from(envelope.tag || '', 'base64url');
   const data = Buffer.from(envelope.data || '', 'base64url');
-  if (iv.length !== 12 || tag.length !== 16 || data.length > MAX_BODY
+  if (iv.length !== 12 || tag.length !== 16 || data.length > max
     || iv.toString('base64url') !== envelope.iv || tag.toString('base64url') !== envelope.tag
     || data.toString('base64url') !== envelope.data) throw new Error('Dữ liệu LAN không hợp lệ.');
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
   decipher.setAAD(AAD);
   decipher.setAuthTag(tag);
   const msg = JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8'));
-  if (msg.v !== 1 || !Number.isFinite(msg.at) || Math.abs(Date.now() - msg.at) > 120000) throw new Error('Tin nhắn LAN đã hết hạn.');
+  if (msg.v !== 1 || !Number.isFinite(msg.at) || Math.abs(Date.now() - msg.at) > CLOCK_SKEW) throw new Error('Tin nhắn LAN đã hết hạn.');
   return msg;
 }
 
@@ -84,6 +93,18 @@ function safeGarden(value) {
       ? { level: value.house.level, decor: Object.fromEntries(['roof', 'window', 'side', 'front'].map((k) => [k, id(value.house.decor && value.house.decor[k])])) }
       : null,
   };
+}
+
+// Đổi lỗi kỹ thuật thành lời nhắn người chơi tự xử lý được.
+function lanErrorText(e, client) {
+  const where = client ? `${client.ip}:${client.port}` : 'máy chủ phòng';
+  if (e.status === 403) return 'Chủ phòng từ chối: mã mời đã hết hạn (15 phút), đã bị thu hồi, hoặc đồng hồ hai máy lệch nhau quá 10 phút. Xin mã mời mới.';
+  if (e.status === 429) return 'Gửi yêu cầu quá nhanh, thử lại sau ít giây.';
+  if (e.code === 'ECONNREFUSED') return `Không có phòng nào mở tại ${where}. Kiểm tra chủ phòng vẫn đang mở phòng LAN.`;
+  if (e.code === 'EHOSTUNREACH' || e.code === 'ENETUNREACH') return `Không tới được ${where}: hai máy không cùng mạng LAN.`;
+  if (e.code === 'ETIMEDOUT' || /quá thời gian/.test(e.message)) return `Không tới được ${where}. Hai máy phải cùng mạng LAN, và máy chủ phòng cần cho phép Vườn Pixel trong Tường lửa Windows (mạng Private).`;
+  if (/Unsupported state|authenticate/i.test(e.message)) return 'Khoá mã mời không khớp. Hãy dán lại đầy đủ mã mời.';
+  return e.message;
 }
 
 class LanRoom {
@@ -141,11 +162,13 @@ class LanRoom {
     });
     server.maxHeadersCount = 12;
     server.on('clientError', (_e, socket) => socket.destroy());
-    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, ip, () => { server.off('error', reject); resolve(); }); });
+    // Nghe trên mọi card mạng: bạn vào được dù mã mời có nhiều địa chỉ; onRequest vẫn chỉ nhận IP nội bộ.
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '0.0.0.0', () => { server.off('error', reject); resolve(); }); })
+      .catch((e) => { throw new Error(e.code === 'EADDRINUSE' ? `Cổng ${port} đang bị chương trình khác dùng. Hãy đóng bản Vườn Pixel khác rồi thử lại.` : e.message); });
     this.server = server; this.role = 'host'; this.hostIP = ip; this.error = '';
     this.timer = setInterval(() => this.emit(), 2500);
     this.emit();
-    return { ok: true, msg: `Đã mở phòng LAN tại ${ip}:${server.address().port}.` };
+    return { ok: true, msg: `Đã mở phòng LAN tại ${ip}:${server.address().port}. Nếu Windows hỏi Tường lửa, hãy bấm Cho phép (Allow) để bạn bè vào được.` };
   }
 
   async invite() {
@@ -155,18 +178,25 @@ class LanRoom {
     const key = randomId(32);
     this.config.invites[id] = { key, expires: Date.now() + 15 * 60000, name: '' };
     await this.saveConfig(this.config);
-    return { ok: true, code: `PG1|${this.hostIP}|${this.server.address().port}|${id}|${key}`, msg: 'Mã mời có hiệu lực 15 phút để ghép cặp lần đầu.' };
+    const ips = [this.hostIP, ...addresses().filter((x) => x !== this.hostIP && !x.startsWith('127.'))].slice(0, 4);
+    return { ok: true, code: `PG1|${ips.join(',')}|${this.server.address().port}|${id}|${key}`, msg: 'Mã mời có hiệu lực 15 phút để ghép cặp lần đầu.' };
   }
 
   async join(code) {
     if (this.role) throw new Error('Hãy rời phòng hiện tại trước.');
     const entry = parseInvite(code);
     const old = this.config.joined;
-    this.config.joined = entry;
-    this.client = entry;
     this.role = 'guest';
-    try { await this.poll(); }
-    catch (e) { this.config.joined = old; this.client = null; this.role = null; throw e; }
+    let lastError = null;
+    for (const ip of entry.ips || [entry.ip]) {
+      this.client = { ...entry, ip };
+      try { await this.poll(4000); lastError = null; break; } catch (e) { lastError = e; }
+    }
+    if (lastError) { this.config.joined = old; this.client = null; this.role = null; throw lastError; }
+    entry.ip = this.client.ip;
+    entry.ips = [this.client.ip, ...(entry.ips || []).filter((x) => x !== this.client.ip)];
+    this.client = entry;
+    this.config.joined = entry;
     await this.saveConfig(this.config);
     this.timer = setInterval(() => this.poll().catch((e) => {
       this.roster = this.roster.map((p) => ({ ...p, status: 'Mất kết nối', garden: null }));
@@ -179,7 +209,7 @@ class LanRoom {
   async reconnect() {
     if (!this.config.joined) throw new Error('Chưa có phòng đã ghép cặp.');
     const x = this.config.joined;
-    return this.join(`PG1|${x.ip}|${x.port}|${x.id}|${x.key}`);
+    return this.join(`PG1|${(x.ips || [x.ip]).join(',')}|${x.port}|${x.id}|${x.key}`);
   }
 
   async leave() {
@@ -267,11 +297,11 @@ class LanRoom {
     });
   }
 
-  async poll() {
+  async poll(timeout) {
     if (this.role !== 'guest' || this.polling) return;
     this.polling = true;
     try {
-      const r = await this.rpc({ op: 'poll', alias: this.config.alias, away: this.away, garden: this.getGarden() });
+      const r = await this.rpc({ op: 'poll', alias: this.config.alias, away: this.away, garden: this.getGarden() }, timeout);
       if (!r.ok) throw new Error(r.msg || 'Không kết nối được.');
       const validId = (id) => typeof id === 'string' && /^(host|[A-Za-z0-9_-]{8,32})$/.test(id)
         && !['__proto__', 'constructor', 'prototype'].includes(id);
@@ -301,6 +331,10 @@ class LanRoom {
   }
 
   async rpc(payload, timeout = 10000) {
+    try { return await this.rpcRaw(payload, timeout); } catch (e) { throw new Error(lanErrorText(e, this.client)); }
+  }
+
+  async rpcRaw(payload, timeout) {
     if (!this.client) throw new Error('Chưa có phòng LAN.');
     const key = Buffer.from(this.client.key, 'base64url');
     const rid = randomId(12);
@@ -309,14 +343,14 @@ class LanRoom {
       const req = http.request({ host: this.client.ip, port: this.client.port, path: '/rpc', method: 'POST', timeout,
         headers: { 'content-type': 'application/json', 'content-length': body.length, 'x-pg-peer': this.client.id } }, (res) => {
         const parts = []; let size = 0;
-        res.on('data', (chunk) => { size += chunk.length; if (size > MAX_BODY) res.destroy(new Error('Phản hồi quá dài.')); else parts.push(chunk); });
-        res.on('end', () => { try { if (res.statusCode !== 200) throw new Error('Máy chủ từ chối kết nối.'); resolve(JSON.parse(Buffer.concat(parts).toString('utf8'))); } catch (e) { reject(e); } });
+        res.on('data', (chunk) => { size += chunk.length; if (size > MAX_REPLY) res.destroy(new Error('Phản hồi quá dài.')); else parts.push(chunk); });
+        res.on('end', () => { try { if (res.statusCode !== 200) throw Object.assign(new Error('Máy chủ từ chối kết nối.'), { status: res.statusCode }); resolve(JSON.parse(Buffer.concat(parts).toString('utf8'))); } catch (e) { reject(e); } });
         res.on('error', reject);
       });
       req.on('timeout', () => req.destroy(new Error('Kết nối LAN quá thời gian.')));
       req.on('error', reject); req.end(body);
     });
-    const msg = open(key, response);
+    const msg = open(key, response, MAX_REPLY);
     if (msg.rid !== rid) throw new Error('Phản hồi LAN không khớp.');
     return msg.result;
   }
@@ -340,10 +374,10 @@ class LanRoom {
     let peer = this.peers.get(id);
     if (!peer) { peer = { id, seen: new Map(), lastSeen: 0, away: false, garden: null, name: '' }; this.peers.set(id, peer); }
     const nonce = JSON.parse(Buffer.concat(chunks).toString('utf8')).iv;
-    for (const [n, at] of peer.seen) if (Date.now() - at > 120000) peer.seen.delete(n);
+    for (const [n, at] of peer.seen) if (Date.now() - at > CLOCK_SKEW) peer.seen.delete(n);
     if (peer.seen.has(nonce)) return reject(403);
     peer.seen.set(nonce, Date.now());
-    if (peer.seen.size > 2048) peer.seen.delete(peer.seen.keys().next().value);
+    if (peer.seen.size > 4096) peer.seen.delete(peer.seen.keys().next().value);
     peer.requests = (peer.requests || []).filter((at) => Date.now() - at < 60000);
     if (peer.requests.length >= 120) return reject(429);
     peer.requests.push(Date.now());

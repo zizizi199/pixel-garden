@@ -134,7 +134,7 @@ function mods(slot) {
 }
 
 function drainPerMin(species, m) {
-  return 100 / (species.waterHours * 60 * m.water);
+  return 100 / (species.waterMinutes * m.water);
 }
 
 function growthMult(plant, m) {
@@ -187,7 +187,7 @@ function stepPlant(state, idx, t, fx, offline) {
 
   const windowed = hasWindow(sp, schedule);
   if (!p.bloomed) {
-    p.progress = Math.min(1, p.progress + g / (sp.bloomHours * 60));
+    p.progress = Math.min(1, p.progress + g / sp.bloomMinutes);
     p.waiting = false;
     if (p.progress >= 1) {
       if (!windowed || S.inWindow(t, sp.window)) {
@@ -335,6 +335,7 @@ function water(state, idx, by = null) {
   if (!p) return fail('Ô trống, chưa có cây để tưới.');
   if (p.dead) return fail('Cây đã chết, hãy nhổ đi.');
   if (p.water > C.RULES.waterBlockAbove) return fail('Đất còn ẩm, chưa cần tưới.');
+  const wasThirsty = p.water < C.RULES.thirstyAt;
   p.water = 100;
   if (by) {
     p.visitors.unshift({ by, at: Date.now(), type: 'water' });
@@ -343,8 +344,9 @@ function water(state, idx, by = null) {
     return okr('Đã tưới hộ.');
   }
   state.stats.watered += 1;
-  gainExp(state, C.RULES.waterExp);
-  return okr('Đã tưới nước.');
+  // Chỉ cộng EXP khi cây đang khát: hoa giờ mau khát, tránh tưới liên tục để cày EXP.
+  if (wasThirsty) gainExp(state, C.RULES.waterExp);
+  return okr(wasThirsty ? 'Đã tưới nước.' : 'Đã tưới nước (cây chưa khát nên không có EXP).');
 }
 
 function waterAll(state) {
@@ -383,7 +385,7 @@ function afterPick(slot) {
     p.old = true;
     p.progress = 0.7;
   } else {
-    p.progress = Math.max(0, 1 - sp.regrow.hours / sp.bloomHours);
+    p.progress = Math.max(0, 1 - sp.regrow.minutes / sp.bloomMinutes);
   }
 }
 
@@ -413,7 +415,7 @@ function fertilize(state, idx) {
   if ((state.inventory.items.phan_bon || 0) <= 0) return fail('Hết phân bón, mua thêm trong cửa hàng.');
   state.inventory.items.phan_bon -= 1;
   p.fert = C.RULES.fertMinutes;
-  return okr('Đã bón phân: lớn nhanh x1.5 trong 2 giờ.');
+  return okr(`Đã bón phân: lớn nhanh x${C.RULES.fertMult} trong ${C.RULES.fertMinutes} phút.`);
 }
 
 function removePlant(state, idx) {
@@ -849,7 +851,7 @@ function view(state, now = Date.now()) {
       progress: p.progress, wilting: p.water <= 0, thirsty: p.water < C.RULES.thirstyAt && !p.dead };
     v.thirstyInMin = p.water > C.RULES.thirstyAt ? (p.water - C.RULES.thirstyAt) / drain : 0;
     if (!p.bloomed && !p.old && !p.dead) {
-      v.bloomInMin = ((1 - p.progress) * sp.bloomHours * 60) / growthMult(p, mm);
+      v.bloomInMin = ((1 - p.progress) * sp.bloomMinutes) / growthMult(p, mm);
     }
     if (p.bloomed && !p.faded) v.fadeInMin = Math.max(0, sp.fadeMinutes - p.bloomAge);
     if (p.bloomed) v.value = harvestValue(state, slot);

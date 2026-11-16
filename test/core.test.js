@@ -55,8 +55,8 @@ test('qua đêm không khát, không lớn', () => {
   plant(st, 0, 'huong_duong');
   G.advance(st, at(17, '07:59'));
   const p = st.slots[0].plant;
-  assert.ok(p.water > 99);
-  assert.ok(p.progress < 0.01);
+  assert.ok(p.water >= 100 - 100 / 10 - 1e-9, "chỉ khát đúng 1 phút trước 17:00, qua đêm không khát thêm");
+  assert.ok(p.progress <= 1 / 15 + 1e-9, "chỉ lớn đúng 1 phút trước 17:00, qua đêm không lớn thêm");
 });
 
 test('hoa mười giờ chỉ nở trong khung 10:00–15:00', () => {

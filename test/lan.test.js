@@ -118,3 +118,11 @@ test('phòng LAN: bạn bè, chat, thăm vườn và chỉ hái hoa khi chủ V�
     await host.lan.leave();
   }
 });
+
+test('mã mời có nhiều địa chỉ LAN, bỏ khoảng trắng khi dán', () => {
+  const key = crypto.randomBytes(32).toString('base64url');
+  const r = parseInvite(` PG1|192.168.1.5,10.0.0.7|47321|abcdefgh|${key}\n`);
+  assert.deepEqual(r.ips, ['192.168.1.5', '10.0.0.7']);
+  assert.equal(r.ip, '192.168.1.5');
+  assert.throws(() => parseInvite(`PG1|192.168.1.5,8.8.8.8|47321|abcdefgh|${key}`));
+});

@@ -22,16 +22,14 @@ Asset pack gợi ý và giấy phép: xem `assets/packs/README.md`.
 - Chỉ các phút trong giờ làm mới được tính: cây lớn, nước cạn, hoa tàn. Ngoài giờ vườn "ngủ".
 - App tắt rồi mở lại: vườn được "tua" phần giờ làm đã trôi qua (`advance` trong `src/core/garden.js`).
   Nếu vắng > 10 phút (tắt app, máy ngủ, nghỉ phép) cây không chết, máu tối thiểu 30%.
-- Thời gian ra hoa rút gọn còn **2–8 giờ** (lâu nhất = 1 ngày vườn: gieo hôm nay, hôm sau nở).
+- Thời gian ra hoa rút gọn còn **5–90 phút**: hoa cấp thấp 5–10 phút, tăng dần tới hoa hiếm nhất 90 phút.
 
-**Nhịp tưới** (cây khát khi nước < 25%, ví dụ 8 giờ làm/ngày):
+**Nhịp tưới** (cây khát khi nước < 25%): thời gian cạn nước (`waterMinutes`) tỉ lệ với thời gian nở,
+10–80 phút. Hoa nở 5–10 phút gần như không cần tưới trước khi nở; hoa hiếm nở 70–90 phút cần tưới 1–2 lần.
+Tưới chỉ được cộng EXP khi cây đang khát (chống tưới liên tục để cày EXP).
 
-| Loài | Cạn nước sau | Tưới khoảng |
-|---|---|---|
-| Sen | 2 giờ | 5 lần/ngày (thử thách) |
-| Hướng dương, păng-xê | 2g30 | 4 lần/ngày |
-| Vạn thọ, zinnia, hồng, tulip, mõm sói | 3 giờ | 3–4 lần/ngày |
-| Sao nhái, mười giờ | 4–4g30 | 2–3 lần/ngày |
+**Kinh tế**: lãi (giá bán − giá hạt) và EXP mỗi lần thu hoạch tỉ lệ với số phút nở, sao cho tiền/EXP mỗi giờ
+bằng khoảng 3 lần mức cũ (khi hoa nở 2–8 giờ). Ví dụ: Mười giờ hạt 10 → bán 13, 1 EXP; Lan hồ điệp hạt 400 → bán 652, 99 EXP.
 | Hoa giấy, oải hương, quỳnh, lan | 5–7 giờ | 1–2 lần/ngày |
 | Xương rồng | 9 giờ | 1 lần/ngày |
 

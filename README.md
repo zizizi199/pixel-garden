@@ -39,9 +39,14 @@ npm run share:win
 
 ### Phát hành bản mới lên GitHub
 
-Bản Windows được GitHub Actions tự đóng gói (`.github/workflows/release-windows.yml`): tăng `version` trong `package.json`,
-rồi chạy `scripts\publish-release.cmd` (hoặc tự `git tag v<version>` và `git push origin v<version>`).
-Khoảng 5–10 phút sau, trang Releases sẽ có file ZIP và file `.sha256`.
+Mỗi lần sửa code xong, chạy **`scripts\publish-release.cmd`** (bấm đúp). Script sẽ:
+
+1. Chạy `npm test` – lỗi thì dừng, không đẩy gì lên.
+2. Hỏi phiên bản mới (Enter = tăng số cuối, ví dụ 0.2.0 → 0.2.1; gõ `giu` để ghi đè bản hiện tại).
+3. Hiện danh sách file thay đổi, hỏi mô tả ngắn và xác nhận `y`.
+4. Commit, đẩy nhánh `main` và tag `v<phiên bản>` → GitHub Actions (`.github/workflows/release-windows.yml`)
+   tự đóng gói và tạo Release; khoảng 5–10 phút sau trang Releases có file ZIP và `.sha256`.
+5. Tuỳ chọn: đóng gói ZIP ngay trên máy (`npm run share:win`, ra thư mục `dist`) để chơi thử.
 
 Lệnh tạo portable EXE và bộ cài NSIS qua electron-builder:
 
@@ -97,7 +102,7 @@ sửa `src/core` hoặc `src/main` thì app tự lưu và khởi động lại �
 
 **Luật chính**
 
-- 25 loài hoa, mỗi loài có thời gian nở riêng (dựa theo độ nhanh chậm ngoài đời, rút gọn còn 2–8 giờ: lâu nhất là gieo hôm nay, hôm sau nở).
+- 25 loài hoa, mỗi loài có thời gian nở riêng (dựa theo độ nhanh chậm ngoài đời, rút gọn còn 5–90 phút: hoa đầu tiên 5–10 phút, hoa càng hiếm nở càng lâu).
 - Nước cạn dần theo từng loài. Dưới 25% cây **khát** (lớn chậm một nửa); cạn nước khoảng 5 giờ làm thì cây **chết**.
   Nếu app tắt/máy ngủ (nghỉ phép, họp cả ngày) thì cây chỉ yếu đi, không chết.
 - Một số hoa chỉ nở trong khung giờ: **mười giờ** 10:00–15:00, **sen** 08:00–11:00, **quỳnh** 16:00–17:00 (hết khung là khép/tàn).

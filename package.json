@@ -1,7 +1,7 @@
 {
   "name": "pixel-garden",
   "productName": "Vườn Pixel",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vườn cây pixel dạng thanh ngang trên desktop Windows – tưới cây theo giờ làm 8h–17h.",
   "main": "src/main/main.js",
   "scripts": {
@@ -11,7 +11,12 @@
     "dist": "electron-builder --win portable nsis",
     "share:win": "node scripts/build-share-zip.js"
   },
-  "keywords": ["electron", "pixel-art", "garden", "idle-game"],
+  "keywords": [
+    "electron",
+    "pixel-art",
+    "garden",
+    "idle-game"
+  ],
   "license": "UNLICENSED",
   "devDependencies": {
     "electron": "^45.3.1",
@@ -20,9 +25,24 @@
   "build": {
     "appId": "vn.pixelgarden.app",
     "productName": "Vuon Pixel",
-    "files": ["src/**/*", "assets/**/*", "package.json"],
-    "win": { "icon": "assets/icon.png", "target": ["portable", "nsis"] },
-    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true },
-    "portable": { "artifactName": "VuonPixel-${version}-portable.exe" }
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "VuonPixel-${version}-portable.exe"
+    }
   }
 }

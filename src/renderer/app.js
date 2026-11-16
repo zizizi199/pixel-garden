@@ -34,7 +34,6 @@
     if (h) return `${h}g`;
     return `${m}p`;
   }
-  const hrs = (h) => dur(h * 60);
 
   // ------------------------------------------------------------ hành động
   async function act(a, anchor) {
@@ -812,7 +811,7 @@
     return Math.max(60, total);
   };
   function waterTimes(sp) { // số lần tưới mỗi ngày làm nếu tưới khi cây bắt đầu khát
-    const per = sp.waterHours * 60 * (1 - CAT.rules.thirstyAt / 100);
+    const per = sp.waterMinutes * (1 - CAT.rules.thirstyAt / 100);
     return Math.max(1, Math.round(workMinPerDay() / per));
   }
 
@@ -877,7 +876,7 @@
         const unlocked = V.unlocked.species.includes(sp.id);
         const lvOk = V.level >= sp.level;
         const have = V.inventory.seeds[sp.id] || 0;
-        const tags = [`Nở sau ${hrs(sp.bloomHours)}`, `Tưới ~${waterTimes(sp)} lần/ngày`];
+        const tags = [`Nở sau ${dur(sp.bloomMinutes)}`, `Tưới ~${waterTimes(sp)} lần/ngày`];
         if (sp.window) tags.push(`Chỉ nở ${sp.window[0]}–${sp.window[1]}`);
         if (sp.regrow) tags.push(`Ra hoa lại ${sp.regrow.harvests} lần`);
         let lines; let buttons;
@@ -1084,9 +1083,9 @@
     const g = grid(body); g.classList.add('wiki');
     const focus = typeof panelArg === 'string' ? panelArg : null;
     for (const sp of CAT.species) {
-      const tags = [`Ngoài đời: ${sp.realDays}`, `Game: nở sau ${hrs(sp.bloomHours)}`, `Cạn nước sau ${hrs(sp.waterHours)}`, `~${waterTimes(sp)} lần tưới/ngày`, `Giữ hoa ${dur(sp.fadeMinutes)}`];
+      const tags = [`Ngoài đời: ${sp.realDays}`, `Game: nở sau ${dur(sp.bloomMinutes)}`, `Cạn nước sau ${dur(sp.waterMinutes)}`, `~${waterTimes(sp)} lần tưới/ngày`, `Giữ hoa ${dur(sp.fadeMinutes)}`];
       if (sp.window) tags.push(`Nở ${sp.window[0]}–${sp.window[1]}`);
-      if (sp.regrow) tags.push(`Lâu năm: ra nụ lại sau ${hrs(sp.regrow.hours)}, ${sp.regrow.harvests} lần`);
+      if (sp.regrow) tags.push(`Lâu năm: ra nụ lại sau ${dur(sp.regrow.minutes)}, ${sp.regrow.harvests} lần`);
       tags.push(`Mở ở cấp ${sp.level}`);
       if (sp.wheel) tags.push('🎡 Vòng quay');
       const c = card({ pic: canvasOf(Sprites.plant(sp, 'bloom')), title: `${sp.name}`, lines: [`<i>${esc(sp.sci)}</i>`, esc(sp.info)], tags, locked: V.level < sp.level && !V.unlocked.species.includes(sp.id), tier: sp.tier });
