@@ -39,6 +39,7 @@ const DEV = !app.isPackaged; // bản chạy từ mã nguồn: tự tải lại 
 const ADMIN = adminAllowed(app.isPackaged);
 
 if (!app.requestSingleInstanceLock()) {
+  console.log('Vườn Pixel đang chạy sẵn (xem biểu tượng ở khay hệ thống) – bản này tự thoát. Thoát bản cũ trước rồi chạy lại.');
   app.quit();
 }
 
@@ -373,7 +374,10 @@ app.whenReady().then(async () => {
   let lanConfig = {};
   let lanError = '';
   try { lanConfig = await loadLanConfig(); } catch (e) { lanError = e.message; }
-  lan = new LanRoom({ config: lanConfig, saveConfig: saveLanConfig,
+  // Máy trung chuyển phòng Internet: "relayUrl" trong package.json (đặt sau khi deploy relay/),
+  // có thể ghi đè khi phát triển bằng biến môi trường PIXEL_GARDEN_RELAY.
+  const relayUrl = process.env.PIXEL_GARDEN_RELAY || require('../../package.json').relayUrl || '';
+  lan = new LanRoom({ config: lanConfig, saveConfig: saveLanConfig, relayUrl,
     getGarden: () => publicGarden(G.view(state)), handleVisit: handleLanVisit, applyReward: applyLanReward,
     changed: (v) => { if (win) win.webContents.send('lan-state', v); },
   });
@@ -404,6 +408,7 @@ app.whenReady().then(async () => {
     if (lanError) return { ok: false, msg: lanError };
     try {
       if (a.type === 'host') return await lan.host(a.ip);
+      if (a.type === 'hostOnline') return await lan.hostOnline();
       if (a.type === 'invite') return await lan.invite();
       if (a.type === 'join') return await lan.join(a.code);
       if (a.type === 'reconnect') return await lan.reconnect();

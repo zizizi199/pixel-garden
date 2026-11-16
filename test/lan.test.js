@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const http = require('node:http');
 const G = require('../src/core/garden');
-const { LanRoom, parseInvite, publicGarden, safeGarden, seal, open } = require('../src/main/lan');
+const { LanRoom, parseInvite, publicGarden, safeGarden, seal, open, validRelayUrl } = require('../src/main/lan');
 
 function room(name) {
   const state = G.createState();
@@ -125,4 +125,69 @@ test('mã mời có nhiều địa chỉ LAN, bỏ khoảng trắng khi dán', (
   assert.deepEqual(r.ips, ['192.168.1.5', '10.0.0.7']);
   assert.equal(r.ip, '192.168.1.5');
   assert.throws(() => parseInvite(`PG1|192.168.1.5,8.8.8.8|47321|abcdefgh|${key}`));
+});
+
+// Trạm trung chuyển giả trong bộ nhớ: chuyển nguyên văn dữ liệu đã mã hoá như relay/src/index.js.
+function fakeRelay() {
+  const hosts = new Map();
+  const seen = [];
+  const createLink = (o) => ({
+    ...o,
+    async open() { if (o.role === 'host') hosts.set(o.room, this); },
+    async request(body) {
+      seen.push(body);
+      const h = hosts.get(o.room);
+      if (!h) throw Object.assign(new Error('off'), { code: 'HOST_OFFLINE' });
+      return h.onRequest(o.peer, body);
+    },
+    close() { if (hosts.get(o.room) === this) hosts.delete(o.room); },
+  });
+  return { createLink, seen };
+}
+
+function onlineRoom(name, relay) {
+  const state = G.createState();
+  const lan = new LanRoom({ config: { alias: name }, saveConfig: async () => {}, changed: () => {},
+    relayUrl: 'wss://relay.example.workers.dev', createLink: relay.createLink,
+    getGarden: () => publicGarden(G.view(state)),
+    handleVisit: ({ kind, slot, by, away }) => {
+      if (kind === 'steal' && !away) return { ok: false, msg: 'Chủ vườn đang chơi.' };
+      return kind === 'water' ? G.visitWater(state, slot, by) : G.visitSteal(state, slot, by);
+    },
+    applyReward: ({ money, exp }) => { state.money += money; G.gainExp(state, exp); },
+  });
+  return { lan, state };
+}
+
+test('phòng Internet: mời bằng mã PG2, chat, hái hoa; trạm chỉ thấy dữ liệu đã mã hoá', async () => {
+  const relay = fakeRelay();
+  const host = onlineRoom('Chủ online', relay);
+  const guest = onlineRoom('Khách online', relay);
+  await host.lan.hostOnline();
+  const { code } = await host.lan.invite();
+  assert.match(code, /^PG2\|relay\.example\.workers\.dev\|/);
+  assert.equal((await guest.lan.join(code)).ok, true);
+  assert.equal(guest.lan.status().mode, 'online');
+  await guest.lan.chat('Bí mật văn phòng');
+  assert.equal(host.lan.status().messages.at(-1).text, 'Bí mật văn phòng');
+  assert.ok(relay.seen.length && relay.seen.every((b) => !b.includes('Bí mật') && !b.includes('Khách online')));
+  G.plantSeed(host.state, 0, 'van_tho');
+  Object.assign(host.state.slots[0].plant, { progress: 1, bloomed: true });
+  host.lan.setAway(true);
+  assert.equal((await guest.lan.visit('host', 'steal', 0)).ok, true);
+  await host.lan.leave();
+  await assert.rejects(() => guest.lan.poll(), /không trực tuyến/);
+  await guest.lan.leave();
+});
+
+test('mã mời Internet và địa chỉ trạm được kiểm tra chặt', () => {
+  const key = crypto.randomBytes(32).toString('base64url');
+  const r = parseInvite(`PG2|relay.example.workers.dev|abcdefghijklmnopqrstuvwx|abcdefgh|${key}`);
+  assert.equal(r.relay, 'wss://relay.example.workers.dev');
+  assert.equal(parseInvite(`PG2|127.0.0.1:8787|abcdefghijklmnopqrstuvwx|abcdefgh|${key}`).relay, 'ws://127.0.0.1:8787');
+  assert.throws(() => parseInvite(`PG2|evil.com/x?y|abcdefghijklmnopqrstuvwx|abcdefgh|${key}`));
+  assert.throws(() => parseInvite(`PG2|relay.example.workers.dev|short|abcdefgh|${key}`));
+  assert.ok(validRelayUrl('wss://pixel-garden-relay.abc.workers.dev'));
+  assert.ok(!validRelayUrl('ws://pixel-garden-relay.abc.workers.dev'), 'Internet phải dùng wss');
+  assert.ok(!validRelayUrl('https://x.com'));
 });

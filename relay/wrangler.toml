@@ -1,0 +1,12 @@
+name = "pixel-garden-relay"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+# Gói miễn phí của Cloudflare chỉ hỗ trợ Durable Object loại SQLite.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

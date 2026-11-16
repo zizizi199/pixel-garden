@@ -58,10 +58,16 @@ Chạy test logic: `npm test`.
 Admin mặc định tắt khi chạy từ mã nguồn; phiên phát triển có thể chủ động bật bằng biến môi trường
 `PIXEL_GARDEN_ADMIN=1`. Bản đóng gói luôn tắt Admin.
 
-## Chơi cùng bạn qua LAN
+## Chơi cùng bạn (LAN hoặc Internet)
 
-Mở **🌐 Bạn bè & chat** ở menu bên phải. Một người chọn địa chỉ mạng nội bộ, bấm **Mở phòng LAN** rồi
-**Tạo mã mời bạn**. Gửi mã đó riêng cho người muốn mời; người nhận dán vào ô **Vào phòng**.
+Mở **🌐 Bạn bè & chat** ở menu bên phải. Chủ phòng chọn một trong hai:
+
+- **🌐 Mở phòng Internet** (mã mời `PG2|…`): chơi được dù mạng công ty chặn LAN hay khác mạng. Dữ liệu đi qua
+  máy trung chuyển Cloudflare nhưng được mã hoá đầu-cuối, trạm không đọc được. Cần cài trạm 1 lần – xem
+  [`relay/README.md`](relay/README.md) (bấm đúp `relay\deploy-relay.cmd`).
+- **Mở phòng LAN** (mã mời `PG1|…`): chọn địa chỉ mạng nội bộ; chỉ dùng được trong cùng mạng.
+
+Sau khi mở phòng, bấm **Tạo mã mời bạn**. Gửi mã đó riêng cho người muốn mời; người nhận dán vào ô **Vào phòng**.
 Mã mời dùng để ghép cặp lần đầu trong 15 phút. Những lần sau có thể bấm **Kết nối lại phòng đã ghép cặp**.
 
 Người mới vào sẽ ở mục **Người chơi khác**; bấm **Kết bạn** để chuyển sang **Bạn bè**. Trong phòng có
@@ -76,7 +82,7 @@ Vào **Cửa hàng › Cảnh vườn** để mua mô hình đặt cạnh nhà t
 món chỉ nhận từ **Vòng quay may mắn**. Mua một lần, đổi món đang dùng trong **Kho đồ › Cảnh vườn**.
 Cả mô hình và phông nền đều được vẽ bằng code và có chuyển động.
 
-Chế độ LAN mặc định tắt, không tự tìm máy và không dùng Internet. App chỉ gửi biệt danh, tin chat và
+Phòng chơi mặc định tắt, không tự tìm máy. Phòng LAN không dùng Internet; phòng Internet chỉ kết nối tới máy trung chuyển đã cấu hình. App chỉ gửi biệt danh, tin chat và
 dữ liệu hiển thị vườn; không gửi lịch hoạt động, nhật ký, kho đồ, đường dẫn hoặc thông tin máy.
 Nội dung trao đổi được mã hoá bằng mã mời riêng; địa chỉ IP và cổng kết nối vẫn hiện với người được mời
 và hệ thống mạng. Windows Firewall có thể cần cho phép app nhận kết nối trên mạng nội bộ.

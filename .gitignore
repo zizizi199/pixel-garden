@@ -10,3 +10,4 @@ lan.sec
 # Asset pack thường có giấy phép cấm phân phối lại – không đẩy lên GitHub.
 # Pack CC0 muốn đưa vào repo: git add -f assets/packs/<ten-pack>
 assets/packs/*/
+.wrangler/

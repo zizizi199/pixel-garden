@@ -1,0 +1,12 @@
+{
+  "name": "pixel-garden-relay",
+  "private": true,
+  "description": "Máy trung chuyển phòng Internet của Vườn Pixel (Cloudflare Worker).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}
