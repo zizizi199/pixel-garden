@@ -90,7 +90,8 @@ function open(key, envelope, max = MAX_BODY) {
 // Danh sách trường cho phép trên mạng. Không sao chép trực tiếp G.view(state).
 function publicGarden(view) {
   return {
-    slots: (view.slots || []).slice(0, 12).map((s) => ({ pot: s.pot, decor: (s.decor || []).slice(0, 4), species: s.species || null, stage: s.stage })),
+    slots: (view.slots || []).slice(0, 12).map((s) => ({ pot: s.pot, decor: (s.decor || []).slice(0, 4), species: s.species || null, stage: s.stage,
+      water: Math.round(Number(s.water) || 0), thirsty: !!s.thirsty })),
     pet: view.pet ? view.pet.id : null,
     house: view.house ? { level: view.house.level, decor: view.house.decor } : null,
     scene: { object: view.scene && view.scene.object || null, background: view.scene && view.scene.background || null },
@@ -107,6 +108,8 @@ function safeGarden(value) {
       decor: Array.from({ length: 4 }, (_, i) => id(s && Array.isArray(s.decor) && s.decor[i])),
       species: id(s && s.species),
       stage: stages.has(s && s.stage) ? s.stage : 'empty',
+      water: Number.isFinite(s && s.water) ? Math.max(0, Math.min(100, Math.round(s.water))) : 100,
+      thirsty: !!(s && s.thirsty === true),
     })),
     pet: id(value.pet),
     scene: { object: id(value.scene && value.scene.object), background: id(value.scene && value.scene.background) },
@@ -290,20 +293,20 @@ class LanRoom {
   async leave() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    for (const p of this.pending.values()) { clearTimeout(p.timer); p.resolve({ ok: false, msg: 'Phòng LAN đã đóng.' }); }
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.resolve({ ok: false, msg: 'Phòng đã đóng.' }); }
     this.pending.clear(); this.peers.clear(); this.roster = []; this.messages = []; this.error = '';
     if (this.server) await new Promise((resolve) => this.server.close(resolve));
     if (this.link) this.link.close();
     this.server = null; this.link = null; this.client = null; this.role = null; this.mode = null; this.away = false;
     this.emit();
-    return { ok: true, msg: 'Đã rời phòng LAN.' };
+    return { ok: true, msg: 'Đã rời phòng.' };
   }
 
   async setAlias(name) {
     this.config.alias = cleanName(name);
     await this.saveConfig(this.config);
     this.emit();
-    return { ok: true, msg: 'Đã đổi biệt danh LAN.' };
+    return { ok: true, msg: 'Đã đổi biệt danh.' };
   }
 
   setAway(value) { this.away = !!value; this.emit(); return { ok: true, msg: this.away ? 'Bạn đang Vắng mặt.' : 'Bạn đang chơi.' }; }
@@ -334,7 +337,7 @@ class LanRoom {
   async chat(text) {
     text = cleanText(text);
     if (!text) throw new Error('Nhập tin nhắn trước khi gửi.');
-    if (!this.role) throw new Error('Hãy vào phòng LAN trước.');
+    if (!this.role) throw new Error('Hãy vào phòng trước.');
     if (this.role === 'host') this.addChat('host', this.config.alias, text);
     else { const r = await this.rpc({ op: 'chat', text }); if (!r.ok) throw new Error(r.msg); await this.poll(); }
     this.emit();
@@ -348,7 +351,7 @@ class LanRoom {
   }
 
   async visit(target, kind, slot) {
-    if (!this.role) throw new Error('Hãy vào phòng LAN trước.');
+    if (!this.role) throw new Error('Hãy vào phòng trước.');
     if (!['water', 'steal'].includes(kind) || !Number.isInteger(slot) || slot < 0 || slot > 11) throw new Error('Hành động không hợp lệ.');
     if (target === (this.role === 'host' ? 'host' : this.client.id)) throw new Error('Không thể thăm vườn của mình.');
     const r = this.role === 'host'

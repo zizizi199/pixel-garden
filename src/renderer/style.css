@@ -492,3 +492,15 @@ body.mode-bar.pos-top #toast { top: 8px; }
 .slot .timer i.water.low { animation: pulse 1s steps(2) infinite; }
 .slot .pdecor[data-decor="hoa_dang"] { filter: drop-shadow(0 0 4px #ffd23f); animation: bob 1.6s steps(2) infinite; }
 .slot .pdecor[data-decor="den_hoi_an"] { filter: drop-shadow(0 0 3px #ffca3a); }
+
+/* Thăm vườn người khác: thanh vườn hiện vườn của họ, chỉ tưới hộ / hái hoa */
+#visit-banner {
+  position: absolute; top: 3px; left: 50%; transform: translateX(-50%); z-index: 6;
+  display: flex; align-items: center; gap: 8px; padding: 2px 4px 2px 10px; white-space: nowrap;
+  background: var(--paper); border: 2px solid var(--wood-d); font-size: 12px; font-weight: 600;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, .25);
+}
+#visit-banner button { font-size: 11.5px; padding: 1px 8px; }
+body.visiting #tools, body.visiting #reset-shift { opacity: .35; pointer-events: none; }
+body.visiting #garden { outline: 3px dashed var(--gold); outline-offset: -3px; }
+body.visiting #house, body.visiting #scene-object { cursor: default; }

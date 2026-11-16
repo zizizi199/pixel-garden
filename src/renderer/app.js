@@ -12,7 +12,8 @@
   let panel = null; // shop | bag | wiki | log | settings | detail
   let sub = null; // tab con của panel
   let panelArg = null;
-  let lanPlayer = null;
+  let visiting = null; // id người chơi đang thăm vườn (thanh vườn hiện vườn của họ)
+  let chatScroll = null; let chatDraft = '';
   let lanInvite = '';
   let confirmTap = null; // {key, until}
   const GARDEN_SCALE = 2.5; // số px màn hình cho 1 pixel sprite trong vườn
@@ -156,6 +157,63 @@
     $('#sky').className = h < 6 || h >= 19 ? 'night' : h < 11 ? 'morning' : h < 16 ? 'noon' : 'afternoon';
   }
 
+  /** Vườn đang hiển thị trên thanh: của mình, hoặc của người đang thăm (chỉ tưới hộ / hái trộm). */
+  let gvCache = { L: null, id: null, val: null };
+  function gv() {
+    if (!visiting) return V;
+    if (gvCache.L === L && gvCache.id === visiting && gvCache.val) return gvCache.val;
+    const val = buildVisitView();
+    gvCache = { L, id: visiting, val: val.visit ? val : null };
+    return val;
+  }
+  function buildVisitView() {
+    const p = L && L.role && (L.players || []).find((x) => x.id === visiting);
+    if (!p || !p.garden || p.status === 'Mất kết nối') {
+      visiting = null; document.body.classList.remove('visiting');
+      toast('Chủ vườn đã mất kết nối – quay về vườn của bạn.', true);
+      return V;
+    }
+    const g = p.garden;
+    return {
+      visit: true, owner: p, now: Date.now(),
+      slots: g.slots.map((x, i) => ({ i, stage: x.species ? x.stage : 'empty', species: x.species, pot: x.pot, decor: x.decor,
+        water: Number.isFinite(x.water) ? x.water : 100, thirsty: !!x.thirsty, name: SP[x.species] ? SP[x.species].name : '' })),
+      house: g.house && CAT.houseLevels[g.house.level - 1] ? { level: g.house.level, decor: g.house.decor, info: CAT.houseLevels[g.house.level - 1] } : null,
+      scene: g.scene, pet: g.pet && PET[g.pet] ? { id: g.pet, sleepMs: 0 } : null,
+    };
+  }
+
+  function renderVisitBanner() {
+    let bn = $('#visit-banner');
+    const G2 = gv();
+    document.body.classList.toggle('visiting', !!G2.visit);
+    if (!G2.visit) { if (bn) bn.remove(); return; }
+    if (!bn) { bn = document.createElement('div'); bn.id = 'visit-banner'; $('#garden').appendChild(bn); }
+    const away = G2.owner.status === 'Vắng mặt';
+    bn.innerHTML = '';
+    const t = document.createElement('span');
+    t.textContent = `🏡 Vườn của ${G2.owner.name} · ${away ? '💤 chủ vắng mặt: tưới hộ hoặc hái hoa đang nở' : '🟢 chủ đang chơi: chỉ tưới hộ được'}`;
+    const back = document.createElement('button'); back.textContent = '⟵ Về vườn mình';
+    back.onclick = () => { visiting = null; Sound.play('open'); renderAll(); };
+    bn.append(t, back);
+  }
+
+  async function visitAct(s, elx) {
+    const o = gv().owner;
+    let kind = null;
+    if (s.stage === 'bloom') {
+      if (o.status !== 'Vắng mặt') { toast('Chỉ hái được hoa khi chủ vườn Vắng mặt (đã thu gọn app).', true); Sound.play('error'); return; }
+      kind = 'steal';
+    } else if (s.stage !== 'empty' && s.stage !== 'dead') kind = 'water';
+    if (!kind) { toast('Ô này không có cây để tưới.', true); return; }
+    const r = await lanAct({ type: 'visit', target: o.id, kind, slot: s.i });
+    if (r.ok) {
+      Sound.play(kind === 'water' ? 'water' : 'harvest');
+      burst(elx, kind === 'water' ? 'drop' : 'petal');
+      if (r.loot) floatText(elx, `+${r.loot.money} xu  +${r.loot.exp} EXP`);
+    }
+  }
+
   function slotStatus(s) {
     if (s.stage === 'empty') return '';
     if (s.stage === 'dead') return 'Chết';
@@ -180,13 +238,16 @@
   }
 
   function renderSlots() {
+    const V = gv();
     const box = $('#slots');
     box.innerHTML = '';
     V.slots.forEach((s) => {
       const d = document.createElement('div');
       d.className = `slot ${s.stage === 'empty' ? 'empty' : ''} ${selected === s.i ? 'selected' : ''} st-${s.stage}${s.wilting ? ' wilting' : ''}`;
       d.style.setProperty('--d', `${-((s.i * 0.73) % 3).toFixed(2)}s`);
-      d.title = slotTitle(s);
+      d.title = V.visit
+        ? (s.stage === 'empty' ? `Ô ${s.i + 1}: trống` : `${s.name} · ${STAGE_VI[s.stage]} · Nước ${s.water}%\n${s.stage === 'bloom' ? 'Bấm để hái trộm (khi chủ vắng mặt)' : 'Bấm để tưới hộ'}`)
+        : slotTitle(s);
       const pc = document.createElement('canvas'); pc.className = 'plant';
       const sp = SP[s.species];
       if (sp) Sprites.paint(pc, Sprites.plant(sp, s.stage, { wilting: s.wilting }), { scale: GARDEN_SCALE });
@@ -222,8 +283,8 @@
       if (s.theftMark) { const t = document.createElement('div'); t.className = 'theft'; t.textContent = '👣'; t.title = `${s.theftMark.by} đã hái trộm ở đây!`; d.appendChild(t); }
       const lb = document.createElement('div'); lb.className = 'label'; lb.textContent = slotStatus(s);
       d.appendChild(lb);
-      d.onclick = () => onSlot(s, d);
-      d.oncontextmenu = (e) => { e.preventDefault(); selected = s.i; openPanel(s.stage === 'empty' ? 'shop' : 'detail', s.i, 'seeds'); renderSlots(); };
+      d.onclick = () => (V.visit ? visitAct(s, d) : onSlot(s, d));
+      d.oncontextmenu = (e) => { e.preventDefault(); if (V.visit) return; selected = s.i; openPanel(s.stage === 'empty' ? 'shop' : 'detail', s.i, 'seeds'); renderSlots(); };
       box.appendChild(d);
     });
     if (V.nextSlotPrice != null) {
@@ -271,6 +332,7 @@
 
   /** Nhà thú ở góc phải (chỉ hiện khi đã có pet). Pet đang ngủ thì nằm trước cửa nhà. */
   function renderHouse() {
+    const V = gv();
     const box = $('#house');
     $('#slots').style.right = V.house ? (V.scene && V.scene.object ? '235px' : '140px') : (V.scene && V.scene.object ? '108px' : '6px');
     if (!V.house) { box.classList.add('hidden'); return; }
@@ -299,10 +361,11 @@
     const lb = document.createElement('div'); lb.className = 'house-label'; lb.textContent = V.house.info.name;
     box.appendChild(lb);
     box.title = `${V.house.info.name} – bấm để nâng cấp / trang trí`;
-    box.onclick = () => { Sound.play('open'); openPanel('house'); };
+    box.onclick = () => { if (V.visit) return; Sound.play('open'); openPanel('house'); };
   }
 
   function renderScene() {
+    const V = gv();
     const id = V.scene && V.scene.object;
     const spot = $('#scene-object');
     spot.classList.toggle('hidden', !id);
@@ -314,7 +377,7 @@
       spot.title = `${CAT.sceneObjects.find((x) => x.id === id)?.name || 'Cảnh vườn'} – bấm để đổi`;
     }
     spot.style.right = V.house ? '130px' : '8px';
-    spot.onclick = () => openPanel('bag', null, 'scene');
+    spot.onclick = () => { if (!V.visit) openPanel('bag', null, 'scene'); };
     const sky = $('#sky');
     const bg = V.scene && V.scene.background || '';
     if (sky.dataset.scene !== bg) {
@@ -635,9 +698,10 @@
         const label = document.createElement('span'); label.textContent = `${p.name} · ${p.status}`;
         const friend = document.createElement('button'); friend.textContent = friends.has(p.id) ? '★ Bỏ bạn' : '☆ Kết bạn';
         friend.onclick = () => lanAct({ type: 'friend', id: p.id });
-        const visit = document.createElement('button'); visit.textContent = 'Thăm vườn';
+        const visit = document.createElement('button'); visit.textContent = visiting === p.id ? '🏡 Đang thăm' : 'Thăm vườn';
         visit.disabled = !p.garden || p.status === 'Mất kết nối';
-        visit.onclick = () => { lanPlayer = p.id; renderPanel(); };
+        visit.title = 'Thanh vườn sẽ hiện vườn của người này: bấm cây để tưới hộ, hoặc hái hoa đang nở khi chủ vắng mặt.';
+        visit.onclick = () => { visiting = p.id; Sound.play('open'); closePanel(); renderAll(); };
         row.append(label, friend, visit);
         if (L.role === 'host' && p.id !== 'host') {
           const revoke = document.createElement('button'); revoke.textContent = 'Chặn';
@@ -650,52 +714,8 @@
       people.appendChild(section);
     }
 
-    const current = L.role && others.find((p) => p.id === lanPlayer && p.garden);
-    if (current) {
-      const visit = document.createElement('section'); visit.className = 'lan-visit';
-      const h = document.createElement('h3'); h.textContent = `Vườn của ${current.name}`; visit.appendChild(h);
-      if (current.garden.pet && PET[current.garden.pet]) {
-        const pet = document.createElement('div'); pet.className = 'lan-visitor-pet';
-        pet.appendChild(petPic(PET[current.garden.pet]));
-        const label = document.createElement('span'); label.textContent = PET[current.garden.pet].name; pet.appendChild(label);
-        visit.appendChild(pet);
-      }
-      if (current.garden.house && CAT.houseLevels[current.garden.house.level - 1]) {
-        const house = document.createElement('p'); house.className = 'meta';
-        house.textContent = `🏠 ${CAT.houseLevels[current.garden.house.level - 1].name}`; visit.appendChild(house);
-      }
-      if (current.garden.scene) {
-        const obj = CAT.sceneObjects.find((x) => x.id === current.garden.scene.object);
-        const bg = CAT.backgrounds.find((x) => x.id === current.garden.scene.background);
-        if (obj || bg) {
-          const scenery = document.createElement('div'); scenery.className = 'lan-scene-preview';
-          if (bg) scenery.appendChild(scenePic('background', bg.id));
-          if (obj) scenery.appendChild(scenePic('scene', obj.id));
-          const label = document.createElement('span'); label.textContent = `${obj ? obj.name : 'Cảnh mặc định'} · ${bg ? bg.name : 'Bầu trời mặc định'}`;
-          scenery.appendChild(label); visit.appendChild(scenery);
-        }
-      }
-      const slots = document.createElement('div'); slots.className = 'lan-slots';
-      current.garden.slots.forEach((s, i) => {
-        const card = document.createElement('div'); card.className = 'lan-slot';
-        if (POT[s.pot]) card.appendChild(canvasOf(Sprites.pot(POT[s.pot]), 'lan-pot'));
-        if (s.species && SP[s.species]) card.appendChild(canvasOf(Sprites.plant(SP[s.species], s.stage), 'lan-flower'));
-        const name = document.createElement('span'); name.textContent = `Ô ${i + 1}: ${s.species && SP[s.species] ? SP[s.species].name : 'Trống'}`; card.appendChild(name);
-        const placed = (s.decor || []).filter((id) => id && DEC[id]);
-        if (placed.length) { const d = document.createElement('small'); d.title = placed.map((id) => DEC[id].name).join(', '); d.textContent = `🎀 ${placed.length} món`; card.appendChild(d); }
-        const water = document.createElement('button'); water.textContent = '💧 Tưới hộ'; water.disabled = !s.species || s.stage === 'dead';
-        water.onclick = () => lanAct({ type: 'visit', target: current.id, kind: 'water', slot: i });
-        const steal = document.createElement('button'); steal.textContent = '🌸 Hái hoa';
-        steal.disabled = current.status !== 'Vắng mặt' || s.stage !== 'bloom';
-        steal.title = 'Chỉ hái được khi chủ vườn đã thu gọn app và hoa đang nở.';
-        steal.onclick = () => lanAct({ type: 'visit', target: current.id, kind: 'steal', slot: i });
-        card.append(water, steal); slots.appendChild(card);
-      });
-      visit.appendChild(slots); shell.appendChild(visit);
-    }
-
     const chat = document.createElement('section'); chat.className = 'lan-chat';
-    const title = document.createElement('h3'); title.textContent = 'Chat thế giới · phòng LAN'; chat.appendChild(title);
+    const title = document.createElement('h3'); title.textContent = 'Chat phòng'; chat.appendChild(title);
     const history = document.createElement('div'); history.className = 'lan-chat-history';
     for (const m of L.messages || []) {
       const p = document.createElement('p');
@@ -705,11 +725,14 @@
     }
     chat.appendChild(history);
     const form = document.createElement('form'); form.className = 'lan-row';
-    const input = document.createElement('input'); input.maxLength = 300; input.placeholder = L.role ? 'Nhắn cho người trong phòng LAN…' : 'Vào phòng LAN để chat'; input.disabled = !L.role;
+    const input = document.createElement('input'); input.maxLength = 300; input.placeholder = L.role ? 'Nhắn cho mọi người trong phòng…' : 'Vào phòng để chat'; input.disabled = !L.role;
+    input.value = chatDraft; input.oninput = () => { chatDraft = input.value; };
     const send = document.createElement('button'); send.type = 'submit'; send.textContent = 'Gửi';
     send.disabled = !L.role;
-    form.append(input, send); form.onsubmit = async (e) => { e.preventDefault(); const text = input.value; if (!text.trim()) return; input.value = ''; input.blur(); await lanAct({ type: 'chat', text }); };
+    form.append(input, send); form.onsubmit = async (e) => { e.preventDefault(); const text = input.value; if (!text.trim()) return; input.value = ''; chatDraft = ''; input.blur(); await lanAct({ type: 'chat', text }); };
     chat.appendChild(form); shell.appendChild(chat);
+    // giữ vị trí cuộn: đang ở cuối thì bám cuối (thấy tin mới), đang đọc tin cũ thì giữ nguyên
+    history.scrollTop = !chatScroll || chatScroll.atBottom ? history.scrollHeight : chatScroll.top;
   }
 
   function renderTab() {
@@ -734,7 +757,7 @@
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['items', 'Vật phẩm']],
     bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat LAN', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
 
   function renderPanel() {
     if (!panel) return;
@@ -758,6 +781,8 @@
     }
     const body = $('#panel-body');
     const scroll = body.scrollTop;
+    const ch = body.querySelector('.lan-chat-history');
+    chatScroll = ch ? { top: ch.scrollTop, atBottom: ch.scrollHeight - ch.scrollTop - ch.clientHeight < 12 } : null;
     body.innerHTML = '';
     ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan }[panel])(body);
     body.scrollTop = scroll;
@@ -1303,12 +1328,12 @@
     el.classList.add('show');
     W.sayUntil = performance.now() + ms;
   }
-  const petSleeping = () => !!(V && V.pet && V.pet.sleepMs > 0 && Date.now() < V.now + V.pet.sleepMs);
+  const petSleeping = () => { const V = gv(); return !!(V && V.pet && V.pet.sleepMs > 0 && Date.now() < V.now + V.pet.sleepMs); };
 
   function petFrame(ts) {
     requestAnimationFrame(petFrame);
     const box = $('#pet');
-    const info = V && V.pet;
+    const info = V && gv().pet;
     if (!info || mode === 'collapsed') { box.classList.add('hidden'); W.id = null; return; }
     const p = PET[info.id];
     const cv = box.querySelector('canvas');
@@ -1333,7 +1358,7 @@
     // thoại ngẫu nhiên
     const say = box.querySelector('.pet-say');
     if (W.sayUntil && ts > W.sayUntil) { say.classList.remove('show'); W.sayUntil = 0; }
-    if (V.settings.petTalk !== false) {
+    if (V.settings.petTalk !== false && !visiting) {
       const every = TALK_EVERY[V.settings.talkRate] || TALK_EVERY.vua;
       if (!W.nextTalk) W.nextTalk = ts + 8000;
       if (ts > W.nextTalk) {
@@ -1348,10 +1373,10 @@
     const dt = W.last ? Math.min(0.1, (ts - W.last) / 1000) : 0;
     W.last = ts;
     const garden = $('#garden');
-    const houseW = V.house ? $('#house').clientWidth + 10 : 0;
+    const houseW = gv().house ? $('#house').clientWidth + 10 : 0;
     const maxX = Math.max(40, garden.clientWidth - houseW - cv.clientWidth - 6);
     const sleeping = sleepingNow;
-    box.classList.toggle('at-home', sleeping && !!V.house);
+    box.classList.toggle('at-home', sleeping && !!gv().house);
     box.classList.toggle('sleeping', sleeping);
     const bub = box.querySelector('.pet-bubble');
     const m = MOVE[p.move] || MOVE.walk;
@@ -1376,9 +1401,9 @@
       if (p.move === 'fly') y = 46 + Math.sin(tt * 2.2) * 10;
       if (p.move === 'swim') y = 4 + Math.sin(tt * 3) * 3;
     }
-    if (sleeping && V.house) { // về nhà ngủ: nằm trước cửa nhà thú
+    if (sleeping && gv().house) { // về nhà ngủ: nằm trước cửa nhà thú
       const hb = $('#house');
-      const door = DecorSprites.anchors(V.house.level).door;
+      const door = DecorSprites.anchors(gv().house.level).door;
       W.x = hb.offsetLeft + door[0] * GARDEN_SCALE - cv.clientWidth / 2;
       y = 0;
     } else if (W.x > maxX) W.x = maxX;
@@ -1402,7 +1427,7 @@
   function renderAll() {
     if (!V) return;
     syncAudio();
-    renderHud(); renderSlots(); renderHouse(); renderScene(); renderTab(); renderMenu(); renderBell();
+    renderHud(); renderVisitBanner(); renderSlots(); renderHouse(); renderScene(); renderTab(); renderMenu(); renderBell();
     if (panel) renderPanel();
   }
 
@@ -1428,7 +1453,11 @@
     }
     renderAll();
   });
-  api.onLanState((v) => { L = v; if (panel === 'lan') renderPanel(); });
+  api.onLanState((v) => {
+    L = v;
+    if (panel === 'lan') renderPanel();
+    if (visiting) { if (!L.role) visiting = null; renderVisitBanner(); renderSlots(); renderHouse(); renderScene(); }
+  });
   api.onLayout(({ mode: m, position }) => {
     document.body.classList.toggle('pos-top', position === 'top');
     document.body.classList.toggle('pos-bottom', position !== 'top');
