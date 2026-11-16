@@ -26,8 +26,18 @@ const zip = path.join(dist, `${name}.zip`);
 const shaFile = path.join(dist, `${name}.sha256`);
 
 const step = (msg) => console.log(`>> ${msg}`);
-const runtime = [process.env.ELECTRON_DIST, path.join(dist, 'win-unpacked'), path.join(root, 'node_modules', 'electron', 'dist')]
+const findRuntime = () => [process.env.ELECTRON_DIST, path.join(dist, 'win-unpacked'), path.join(root, 'node_modules', 'electron', 'dist')]
   .filter(Boolean).find((d) => fs.existsSync(path.join(d, 'electron.exe')));
+let runtime = findRuntime();
+// npm có thể bỏ qua bước tải Electron lúc cài (ví dụ trên GitHub Actions) → tự tải bản win32-x64.
+const electronInstall = path.join(root, 'node_modules', 'electron', 'install.js');
+if (!runtime && process.platform === 'win32' && fs.existsSync(electronInstall)) {
+  step('Chưa có electron.exe – tải Electron cho Windows');
+  execFileSync(process.execPath, [electronInstall], {
+    stdio: 'inherit', env: { ...process.env, ELECTRON_INSTALL_PLATFORM: 'win32', ELECTRON_INSTALL_ARCH: 'x64' },
+  });
+  runtime = findRuntime();
+}
 if (!runtime) throw new Error('Không thấy electron.exe. Chạy npm install trên Windows, hoặc đặt ELECTRON_DIST.');
 step(`Electron runtime: ${runtime}`);
 
