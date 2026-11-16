@@ -706,3 +706,6 @@ body.bugging #slots { pointer-events: none; }
 .tree-hint { color: #b5179e; }
 .tree-board { font-size: 12px; line-height: 1.6; border-left: 2px dashed var(--wood-d); padding-left: 10px; }
 .tree-board .me { font-weight: 800; color: #2d6a4f; }
+.tree-top { font-size: 12px; line-height: 1.7; padding: 6px 10px; background: #fff7d6; border: 2px solid var(--gold); }
+.tree-top .me { font-weight: 800; }
+.tree-top button { margin-left: 8px; font-size: 11px; padding: 0 8px; }

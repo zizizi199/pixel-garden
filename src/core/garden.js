@@ -460,6 +460,7 @@ function buy(state, kind, id, qty = 1) {
   if (it.wheel && (kind === 'scene' || kind === 'background' || kind === 'item' || kind === 'power')) return fail(`${it.name} chỉ có từ Vòng quay may mắn.`);
   if (kind === 'power' && state.inventory.powers[id]) return fail(`Bạn đã có ${it.name}.`);
   if (kind === 'power' && !it.price) return fail(`${it.name} không bán.`);
+  if (it.trophy) return fail(`${it.name} chỉ dành cho người đứng đầu Thần mộc.`);
   if (it.wheel && kind === 'decor' && !state.unlocked.decor.includes(id)) return fail(`${it.name} chỉ có khi quay trúng ở Vòng quay may mắn.`);
   if (it.wheel && kind === 'pet' && !state.unlocked.pets.includes(id)) return fail(`${it.name} chỉ có khi quay trúng ở Vòng quay may mắn.`);
   if (state.money < it.price) return fail(`Không đủ xu (cần ${it.price}).`);
@@ -546,6 +547,31 @@ function treeChest(state, milestone, rng = Math.random) {
   else power(true, () => { item('tien_duoc', 2); coin(3000); });
   log(state, 'tree', `Rương Thần mộc mốc ${m}: ${gifts.join(', ')}.`);
   return okr(`🎁 Rương mốc ${m}: ${gifts.join(', ')}`, { gifts });
+}
+
+/** Rương top 3 khi Thần mộc kết trái (máy chủ đã chốt hạng và chặn nhận 2 lần). */
+function treeTopChest(state, rank, rng = Math.random) {
+  const r = Math.max(1, Math.min(3, Math.round(Number(rank) || 3)));
+  const gifts = [];
+  const item = (id, n) => { state.inventory.items[id] = (state.inventory.items[id] || 0) + n; gifts.push(`${n} ${C.ITEMS_BY_ID[id].name}`); };
+  if (r === 1) {
+    const list = C.POWERS.filter((x) => x.wheel && !state.inventory.powers[x.id]);
+    if (list.length) { const pw = list[Math.floor(rng() * list.length)]; state.inventory.powers[pw.id] = 1; gifts.push(`chưởng lực ${pw.name}`); }
+    else item('tien_duoc', 2);
+    item('tien_duoc', 1);
+    state.inventory.decor.tuong_than_moc = (state.inventory.decor.tuong_than_moc || 0) + 1;
+    if (!state.unlocked.decor.includes('tuong_than_moc')) state.unlocked.decor.push('tuong_than_moc');
+    gifts.push('🏆 Tượng Thần mộc');
+  } else if (r === 2) {
+    const pots = C.POTS.filter((x) => x.tier === 3);
+    const p = pots[Math.floor(rng() * pots.length)];
+    state.inventory.pots[p.id] = (state.inventory.pots[p.id] || 0) + 1; gifts.push(`1 ${p.name}`);
+    item('phan_than_ky', 2);
+  } else {
+    item('phan_than_ky', 3); state.money += 500; gifts.push('500 xu');
+  }
+  log(state, 'tree', `Top ${r} Thần mộc: ${gifts.join(', ')}.`);
+  return okr(`🏆 Rương top ${r}: ${gifts.join(', ')}`, { gifts });
 }
 
 function equipScene(state, kind, id) {
@@ -1022,5 +1048,5 @@ module.exports = {
   createState, migrate, advance, view, stageOf, decorFx,
   plantSeed, water, waterAll, harvest, fertilize, removePlant, clearTheft,
   buy, equipScene, buySlot, unlock, spinWheel, ackSpin, wheelPool, upgradeHouse, placeHouseDecor, houseLevel, mods, claimDaily, dailyAvailable, dayKey, placePot, placeDecor, setPet, petInfo, gainExp, fastForward, admin, visitSteal, visitWater, harvestValue,
-  remoteGuard, applyRemoteVisit, equipPower, arenaBag, arenaTransfer, treeChest,
+  remoteGuard, applyRemoteVisit, equipPower, arenaBag, arenaTransfer, treeChest, treeTopChest,
 };

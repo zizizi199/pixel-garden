@@ -492,6 +492,13 @@ app.whenReady().then(async () => {
           }
           return r;
         }
+        if (a.type === 'treeClaimTop') {
+          const r = await lan.treeClaimTop();
+          if (!r.ok) return r;
+          const g3 = G.treeTopChest(state, r.rank);
+          persist(); push(); updateTray();
+          return g3;
+        }
         if (a.type === 'treeClaim') {
           const r = await lan.treeClaim(a.milestone);
           if (!r.ok) return r;

@@ -31,6 +31,7 @@ const POT_DECOR = [
   { id: 'bu_nhin', name: 'Bù nhìn mini', place: 'side', tier: 2, price: 260, level: 5, fx: { guard: 0.2 }, desc: 'Chặn 20% hái trộm ô này.' },
   { id: 'ca_chep', name: 'Đèn cá chép', place: 'side', tier: 4, wheel: true, price: 500, level: 1, fx: { sell: 0.1, water: 0.1 }, desc: '+10% tiền, +10% giữ ẩm.' },
   { id: 'ngoi_sao', name: 'Que sao băng', place: 'side', tier: 5, wheel: true, price: 900, level: 1, fx: { exp: 0.15, growth: 0.1, guard: 0.1 }, desc: '+15% EXP, lớn nhanh +10%, chặn 10% trộm.' },
+  { id: 'tuong_than_moc', name: 'Tượng Thần mộc', place: 'soil', tier: 5, trophy: true, price: 0, level: 1, fx: { growth: 0.12, exp: 0.12, water: 0.1 }, desc: '🏆 Chỉ dành cho người đóng góp nhiều nhất khi Thần mộc kết trái: lớn nhanh +12%, +12% EXP, giữ ẩm +10%.' },
   { id: 'rong_vang', name: 'Tượng rồng vàng', place: 'soil', tier: 6, wheel: true, price: 1600, level: 1, fx: { sell: 0.2, exp: 0.15, guard: 0.2 }, desc: 'Bí ẩn: +20% tiền, +15% EXP, chặn 20% trộm.' },
   { id: 'hang_rao_trang', name: 'Hàng rào trắng mini', place: 'side', tier: 1, wheel: true, price: 70, level: 1, fx: { guard: 0.05, water: 0.03 }, desc: 'Chặn 5% trộm, +3% giữ ẩm.' },
   { id: 'den_hoi_an', name: 'Đèn lồng Hội An', place: 'side', tier: 3, wheel: true, price: 300, level: 1, fx: { exp: 0.08, sell: 0.05 }, desc: '+8% EXP, +5% tiền.' },

@@ -450,3 +450,13 @@ test('chưởng lực: mua, chọn dùng; chưởng vòng quay không mua đư�
   assert.deepEqual([st.arena.wins, st.arena.losses], [1, 1]);
   assert.equal(C.RULES.wheel.cost, 200);
 });
+
+test('Thần mộc: rương mốc và rương top; Tượng Thần mộc không mua được', () => {
+  const st = G.createState();
+  st.money = 99999; st.level = 50;
+  assert.ok(G.treeChest(st, 1).ok);
+  assert.ok(G.treeTopChest(st, 1).ok);
+  assert.equal(st.inventory.decor.tuong_than_moc, 1);
+  assert.equal(G.buy(st, 'decor', 'tuong_than_moc').ok, false);
+  const m = st.money; G.treeTopChest(st, 3); assert.equal(st.money, m + 500);
+});

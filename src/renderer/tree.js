@@ -12,13 +12,13 @@
     g.imageSmoothingEnabled = false;
     const px = (x, y, w, h, c) => { g.fillStyle = c; g.fillRect(x * k, y * k, w * k, h * k); };
     px(0, 56, W, 8, '#8d5a2b'); px(0, 56, W, 2, '#6a994e'); // đất + cỏ
-    const trunkH = 6 + stage * 2.4;
+    const trunkH = 6 + stage * 1.8;
     const trunkW = 2 + Math.floor(stage / 3);
     const cx = 32;
     px(cx - trunkW, 56 - trunkH, trunkW * 2, trunkH, '#6f4518');
     px(cx - trunkW, 56 - trunkH, 1, trunkH, '#8b5e34');
     if (stage >= 2) { px(cx - trunkW - 5, 56 - trunkH * 0.6, 5, 1, '#6f4518'); px(cx + trunkW, 56 - trunkH * 0.7, 6, 1, '#6f4518'); }
-    const r = 4 + stage * 2.1;
+    const r = 4 + stage * 1.3;
     const top = 56 - trunkH;
     const sway = Math.sin(t / 900) * 0.6;
     const blobs = [[0, 0, 1], [-0.7, 0.35, 0.75], [0.7, 0.35, 0.75], [-0.35, -0.55, 0.7], [0.4, -0.5, 0.7]];
@@ -43,6 +43,7 @@
     }
   }
 
+  const TOP = ['chưởng lực Vòng quay + Tiên dược + Tượng Thần mộc + danh hiệu', 'chậu Epic + 2 Phân thần kỳ', '3 Phân thần kỳ + 500 xu'];
   let animRaf = 0;
   function render(body, ctx) {
     cancelAnimationFrame(animRaf);
@@ -112,9 +113,25 @@
       right.appendChild(h);
     }
 
+    // top 3 khi kết trái
+    if (d.top && d.top.length) {
+      const top = document.createElement('div'); top.className = 'tree-top';
+      top.innerHTML = '<b>🏆 Top mùa này (chốt lúc kết trái)</b>';
+      d.top.forEach((x) => {
+        const row = document.createElement('div'); if (x.me) row.className = 'me';
+        row.textContent = `${['🥇', '🥈', '🥉'][x.rank - 1]} ${x.name} – ${x.total} · ${TOP[x.rank - 1]}${x.claimed ? ' ✔' : ''}`;
+        if (x.me && !x.claimed) {
+          const b = document.createElement('button'); b.className = 'primary'; b.textContent = '🏆 Nhận rương top';
+          b.onclick = () => ctx.run({ type: 'treeClaimTop' }); row.appendChild(b);
+        }
+        top.appendChild(row);
+      });
+      right.appendChild(top);
+    }
+
     // bảng đóng góp
     const board = document.createElement('div'); board.className = 'tree-board';
-    board.innerHTML = `<b>Đóng góp mùa này</b>${d.board.length ? '' : '<br><small>Chưa ai góp – hãy là người đầu tiên!</small>'}`;
+    board.innerHTML = `<b>Đóng góp mùa này</b><br><small>Khi cây kết trái: top 3 nhận rương riêng, top 1 được danh hiệu 🌳 Người giữ Thần mộc + Tượng Thần mộc.</small>${d.board.length ? '' : '<br><small>Chưa ai góp – hãy là người đầu tiên!</small>'}`;
     d.board.forEach((x, i) => {
       const row = document.createElement('div'); if (x.me) row.className = 'me';
       row.textContent = `${['🥇', '🥈', '🥉'][i] || `${i + 1}.`} ${x.name} – ${x.total}`;

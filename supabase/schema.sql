@@ -160,7 +160,8 @@ begin
   return jsonb_build_object(
     'now', vp_now_ms(),
     'members', (select coalesce(jsonb_agg(jsonb_build_object('id', user_id, 'name', name, 'away', away,
-        'idle', extract(epoch from now() - last_seen)::int) order by joined_at), '[]'::jsonb)
+        'idle', extract(epoch from now() - last_seen)::int,
+        'keeper', user_id = (select keeper from vp_trees where group_id = p_group)) order by joined_at), '[]'::jsonb)
       from vp_members where group_id = p_group),
     'messages', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'by', user_id, 'name', name, 'body', body,
         'at', (extract(epoch from created_at) * 1000)::bigint) order by id), '[]'::jsonb)
@@ -626,6 +627,8 @@ create table if not exists public.vp_tree_claims (
   claimed_at timestamptz not null default now(),
   primary key (group_id, season, user_id, milestone)
 );
+alter table public.vp_trees add column if not exists top jsonb;     -- top 3 đóng góp chốt lúc kết trái
+alter table public.vp_trees add column if not exists keeper uuid;   -- top 1 mùa gần nhất: danh hiệu "Người giữ Thần mộc"
 alter table public.vp_trees enable row level security;
 alter table public.vp_tree_gifts enable row level security;
 alter table public.vp_tree_claims enable row level security;
@@ -645,7 +648,7 @@ begin
   insert into vp_trees (group_id) values (p_group) on conflict (group_id) do nothing;
   select * into t from vp_trees where group_id = p_group for update;
   if t.completed_at is not null and t.completed_at < now() - interval '3 days' then
-    update vp_trees set season = season + 1, growth = 0, completed_at = null, updated_at = now()
+    update vp_trees set season = season + 1, growth = 0, completed_at = null, top = null, updated_at = now()
       where group_id = p_group returning * into t;
     delete from vp_tree_gifts where group_id = p_group and season < t.season - 1;
     delete from vp_tree_claims where group_id = p_group and season < t.season - 1;
@@ -663,6 +666,9 @@ begin
   select count(*) into open from generate_series(1, array_length(marks, 1)) i
     where t.growth >= marks[i] and helped
       and not exists (select 1 from vp_tree_claims c where c.group_id = p_group and c.season = t.season and c.user_id = uid and c.milestone = i);
+  open := open + (select count(*) from jsonb_array_elements(coalesce(t.top, '[]'::jsonb)) x
+    where (x ->> 'id')::uuid = uid and not exists (select 1 from vp_tree_claims c where c.group_id = p_group and c.season = t.season
+      and c.user_id = uid and c.milestone = 100 + (x ->> 'rank')::int))::int;
   return jsonb_build_object('season', t.season, 'growth', t.growth, 'max', marks[array_length(marks, 1)],
     'watered', coalesce(g.water, 0) > 0, 'claimable', open);
 end $$;
@@ -678,6 +684,12 @@ begin
     'resetAt', case when t.completed_at is null then null else t.completed_at + interval '3 days' end,
     'today', jsonb_build_object('water', coalesce(g.water, 0), 'fert', coalesce(g.fert, 0), 'fertMax', 100),
     'helped', helped,
+    'top', (select coalesce(jsonb_agg(jsonb_build_object('rank', (x ->> 'rank')::int, 'total', (x ->> 'total')::int,
+        'name', coalesce(m.name, '?'), 'me', (x ->> 'id')::uuid = uid,
+        'claimed', exists (select 1 from vp_tree_claims c where c.group_id = p_group and c.season = t.season
+          and c.user_id = (x ->> 'id')::uuid and c.milestone = 100 + (x ->> 'rank')::int)) order by (x ->> 'rank')::int), '[]'::jsonb)
+      from jsonb_array_elements(coalesce(t.top, '[]'::jsonb)) x
+      left join vp_members m on m.group_id = p_group and m.user_id = (x ->> 'id')::uuid),
     'claimed', (select coalesce(jsonb_agg(milestone order by milestone), '[]'::jsonb) from vp_tree_claims
       where group_id = p_group and season = t.season and user_id = uid),
     'board', (select coalesce(jsonb_agg(jsonb_build_object('name', m.name, 'total', x.total, 'me', x.user_id = uid) order by x.total desc), '[]'::jsonb)
@@ -711,6 +723,15 @@ begin
   update vp_trees set growth = least(maxg, growth + add), updated_at = now(),
     completed_at = case when growth + add >= maxg then now() else completed_at end
   where group_id = p_group returning * into t;
+  if t.completed_at is not null and t.top is null then -- vừa kết trái: chốt top 3 và người giữ Thần mộc
+    update vp_trees set
+      top = (select coalesce(jsonb_agg(jsonb_build_object('id', user_id, 'total', total, 'rank', rk) order by rk), '[]'::jsonb)
+        from (select user_id, sum(water + fert) total, row_number() over (order by sum(water + fert) desc, min(day), user_id) rk
+              from vp_tree_gifts where group_id = p_group and season = t.season group by user_id) x where rk <= 3),
+      keeper = (select user_id from vp_tree_gifts where group_id = p_group and season = t.season
+                group by user_id order by sum(water + fert) desc, min(day), user_id limit 1)
+    where group_id = p_group returning * into t;
+  end if;
   return jsonb_build_object('ok', true, 'msg', format('Thần mộc lớn thêm %s!', add), 'growth', t.growth);
 end $$;
 
@@ -730,6 +751,19 @@ begin
   return jsonb_build_object('ok', true, 'milestone', p_milestone, 'season', t.season);
 end $$;
 
+-- top 3 khi cây kết trái nhận thêm rương riêng (milestone 101–103 trong vp_tree_claims)
+create or replace function public.vp_tree_claim_top(p_group uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group); t vp_trees := vp_tree_get(p_group); rk int;
+begin
+  if t.top is null then return jsonb_build_object('ok', false, 'msg', 'Thần mộc chưa kết trái.'); end if;
+  select (x ->> 'rank')::int into rk from jsonb_array_elements(t.top) x where (x ->> 'id')::uuid = uid;
+  if rk is null then return jsonb_build_object('ok', false, 'msg', 'Bạn không nằm trong top 3 mùa này.'); end if;
+  insert into vp_tree_claims (group_id, season, user_id, milestone) values (p_group, t.season, uid, 100 + rk) on conflict do nothing;
+  if not found then return jsonb_build_object('ok', false, 'msg', 'Bạn đã nhận rương top rồi.'); end if;
+  return jsonb_build_object('ok', true, 'rank', rk);
+end $$;
+
 revoke all on function public.vp_tree_marks(), public.vp_today(), public.vp_tree_get(uuid), public.vp_tree_brief(uuid, uuid),
-  public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int) from public, anon;
-grant execute on function public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int) to authenticated;
+  public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int), public.vp_tree_claim_top(uuid) from public, anon;
+grant execute on function public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int), public.vp_tree_claim_top(uuid) to authenticated;

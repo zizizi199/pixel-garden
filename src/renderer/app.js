@@ -681,7 +681,9 @@
     history.innerHTML = '';
     for (const m of L.messages || []) {
       const p = document.createElement('p');
-      const b = document.createElement('b'); b.textContent = `${m.by}: `;
+      const keeper = (L.players || []).some((x) => x.keeper && x.id === m.byId);
+      const b = document.createElement('b'); b.textContent = `${keeper ? '🌳 ' : ''}${m.by}: `;
+      if (keeper) b.title = 'Người giữ Thần mộc';
       const t = document.createElement('span'); t.textContent = m.text;
       p.append(b, t); history.appendChild(p);
     }
@@ -751,7 +753,7 @@
   async function treeAct(a) {
     const r = await api.lan(a);
     toast(r.msg, !r.ok);
-    Sound.play(r.ok ? (a.type === 'treeClaim' ? 'levelup' : a.type === 'treeWater' ? 'water' : 'fert') : 'error');
+    Sound.play(r.ok ? (a.type === 'treeClaim' || a.type === 'treeClaimTop' ? 'levelup' : a.type === 'treeWater' ? 'water' : 'fert') : 'error');
     const s = await api.lan({ type: 'treeState' });
     if (s.ok) treeData = s.tree;
     if (panel === 'tree') renderPanel();
@@ -844,6 +846,7 @@
       return;
     }
     const treeRow = document.createElement('div'); treeRow.className = 'lan-row';
+    if ((L.players || []).some((x) => x.keeper && x.id === L.selfId)) treeRow.append('🌳 Bạn đang giữ danh hiệu "Người giữ Thần mộc"');
     const tb = document.createElement('button'); tb.textContent = `🌳 Thần mộc của nhóm${L.tree && (L.tree.claimable || !L.tree.watered) ? ' ●' : ''}`;
     tb.onclick = openTree; treeRow.appendChild(tb); controls.appendChild(treeRow);
     if (L.duel) {
@@ -930,7 +933,8 @@
       if (!list.length) { const p = document.createElement('p'); p.className = 'meta'; p.textContent = 'Chưa có ai.'; section.appendChild(p); }
       for (const p of list) {
         const row = document.createElement('div'); row.className = 'lan-person';
-        const label = document.createElement('span'); label.textContent = `${p.name} · ${p.status}`;
+        const label = document.createElement('span'); label.textContent = `${p.keeper ? '🌳 ' : ''}${p.name} · ${p.status}`;
+        if (p.keeper) label.title = 'Người giữ Thần mộc – đóng góp nhiều nhất mùa gần nhất';
         const friend = document.createElement('button'); friend.textContent = friends.has(p.id) ? '★ Bỏ bạn' : '☆ Kết bạn';
         friend.onclick = () => lanAct({ type: 'friend', id: p.id });
         const visit = document.createElement('button'); visit.textContent = visiting === p.id ? '🏡 Đang thăm' : 'Thăm vườn';
@@ -1194,7 +1198,7 @@
       for (const [place, title] of [['soil', 'Đặt trên mặt đất'], ['front', 'Gắn mặt chậu'], ['side', 'Cắm cạnh chậu (trái/phải)']]) {
         const h = document.createElement('div'); h.className = 'section-title'; h.textContent = title; body.appendChild(h);
         const gg = grid(body);
-        for (const d of CAT.potDecor.filter((x) => x.place === place)) {
+        for (const d of CAT.potDecor.filter((x) => x.place === place && !x.trophy)) {
           const own = V.inventory.decor[d.id] || 0;
           if (d.wheel && !V.unlocked.decor.includes(d.id)) {
             gg.appendChild(card({ pic: canvasOf(DecorSprites.potDecor(d.id), 'small'), title: d.name, locked: true, tier: d.tier,

@@ -83,7 +83,7 @@ class GroupRoom {
 
   status() {
     const uid = this.config.auth && this.config.auth.uid;
-    const players = this.members.map((m) => ({ id: m.id, name: m.name, status: m.status,
+    const players = this.members.map((m) => ({ id: m.id, name: m.name, status: m.status, keeper: !!m.keeper,
       garden: m.id === this.watchId ? this.watched : null }));
     return { mode: 'group', online: this.configured, role: this.inGroup ? 'member' : null, selfId: uid || null,
       groupCode: this.inGroup ? this.config.group.code : '', away: this.away, alias: this.config.alias,
@@ -249,6 +249,8 @@ class GroupRoom {
       resetAt: r.resetAt || null, helped: !!r.helped,
       today: { water: Number(r.today && r.today.water) || 0, fert: Number(r.today && r.today.fert) || 0, fertMax: Number(r.today && r.today.fertMax) || 100 },
       claimed: Array.isArray(r.claimed) ? r.claimed.map(Number) : [],
+      top: (Array.isArray(r.top) ? r.top : []).slice(0, 3).map((x) => ({ rank: Number(x.rank) || 0, total: Number(x.total) || 0,
+        name: cleanName(x.name), me: !!x.me, claimed: !!x.claimed })),
       board: (Array.isArray(r.board) ? r.board : []).slice(0, 15).map((x) => ({ name: cleanName(x.name), total: Number(x.total) || 0, me: !!x.me })),
     } };
   }
@@ -258,6 +260,13 @@ class GroupRoom {
     const r = await this.rpc('vp_tree_give', { p_group: this.config.group.id, p_kind: kind, p_amount: Number(amount) || 0 });
     this.syncNow().catch(() => {});
     return { ok: !!(r && r.ok), msg: cleanText(r && r.msg) };
+  }
+
+  async treeClaimTop() {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    const r = await this.rpc('vp_tree_claim_top', { p_group: this.config.group.id });
+    this.syncNow().catch(() => {});
+    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg), rank: Number(r && r.rank) };
   }
 
   async treeClaim(milestone) {
@@ -411,7 +420,7 @@ class GroupRoom {
     this.error = '';
     const key = chatKey(g.code);
     this.members = (Array.isArray(r && r.members) ? r.members : []).filter((m) => m && UUID.test(m.id)).slice(0, 60)
-      .map((m) => ({ id: m.id, name: cleanName(m.name),
+      .map((m) => ({ id: m.id, name: cleanName(m.name), keeper: m.keeper === true,
         status: Number(m.idle) > IDLE_OFFLINE_S ? 'Ngoại tuyến' : m.away ? 'Vắng mặt' : 'Đang chơi' }));
     for (const m of (Array.isArray(r && r.messages) ? r.messages : [])) {
       if (!m || !Number.isSafeInteger(m.id) || m.id <= this.lastMsg) continue;
