@@ -13,8 +13,8 @@
  *  waterMinutes số phút (giờ vườn hoạt động) để nước trong chậu cạn từ 100% → 0%,
  *               tỉ lệ theo thời gian nở: hoa nở nhanh thì cũng mau khát
  *  window       khung giờ hoa chịu nở [bắt đầu, kết thúc] (HH:MM); ngoài khung thì nụ chờ,
- *               và hoa đang nở sẽ khép/tàn khi hết khung
- *  fadeMinutes  số phút làm việc hoa giữ được vẻ đẹp sau khi nở, quá thì "tàn" (giá giảm)
+ *               (hoa đã nở thì giữ nguyên tới khi thu hoạch: không tàn, không cần tưới)
+ *  fadeMinutes  (không còn dùng – hoa nở không tàn nữa)
  *  regrow       {minutes, harvests}: cây lâu năm, sau thu hoạch ra nụ lại trong `minutes` phút,
  *               thu hoạch tối đa `harvests` lần rồi cây già (phải nhổ)
  *  unlock       tiền mở khoá giống (1 lần, khi đủ cấp); seed = giá 1 hạt (gieo được 1 lần)
@@ -40,84 +40,84 @@ const SPECIES = [
     id: 'muoi_gio', name: 'Hoa mười giờ', sci: 'Portulaca grandiflora',
     info: 'Cây mọng nước, chịu nóng và hạn rất tốt. Hoa chỉ mở khi có nắng, khép lại khi trời tối hoặc âm u. Ngoài đời ra hoa sau khoảng 6–8 tuần.',
     realDays: '42–56 ngày', bloomMinutes: 5, waterMinutes: 11, window: ['10:00', '15:00'], fadeMinutes: 240,
-    unlock: 0, seed: 10, sell: 13, exp: 1, level: 1, shape: 'star', colors: ['#ff4fa3', '#ffd23f'],
+    unlock: 0, seed: 10, sell: 13, exp: 3, level: 1, shape: 'star', colors: ['#ff4fa3', '#ffd23f'],
     tier: 0,
   },
   {
     id: 'van_tho', name: 'Cúc vạn thọ', sci: 'Tagetes erecta',
     info: 'Loài hoa quen thuộc ngày Tết, dễ trồng, ưa nắng. Mùi lá hăng giúp xua côn trùng. Từ hạt đến ra hoa khoảng 50–60 ngày.',
     realDays: '50–60 ngày', bloomMinutes: 8, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 0, seed: 12, sell: 17, exp: 2, level: 1, shape: 'pompom', colors: ['#ff9f1c', '#ffbf47'],
+    unlock: 0, seed: 12, sell: 17, exp: 6, level: 1, shape: 'pompom', colors: ['#ff9f1c', '#ffbf47'],
     tier: 0,
   },
   {
     id: 'dua_can', name: 'Hoa dừa cạn', sci: 'Catharanthus roseus',
     info: 'Cây bụi nhỏ rất dễ trồng, chịu nắng nóng và khô hạn, ra hoa quanh năm. Hoa 5 cánh có mắt hồng đậm ở giữa. Từ hạt ra hoa khoảng 2–3 tháng.',
     realDays: '60–90 ngày', bloomMinutes: 5, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 0, seed: 9, sell: 12, exp: 1, level: 1, shape: 'daisy', colors: ['#ff5fa2', '#c9184a'],
+    unlock: 0, seed: 9, sell: 12, exp: 3, level: 1, shape: 'daisy', colors: ['#ff5fa2', '#c9184a'],
     tier: 1, wheel: true,
   },
   {
     id: 'cuc_zinnia', name: 'Cúc ngũ sắc (Zinnia)', sci: 'Zinnia elegans',
     info: 'Hoa nhiều màu, chịu nóng, càng cắt hoa càng ra nhiều. Không ưa tưới lên lá. Ra hoa sau khoảng 60–70 ngày.',
     realDays: '60–70 ngày', bloomMinutes: 10, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 120, seed: 15, sell: 23, exp: 4, level: 2, shape: 'pompom', colors: ['#e63946', '#ff7b8a'],
+    unlock: 120, seed: 15, sell: 23, exp: 12, level: 2, shape: 'pompom', colors: ['#e63946', '#ff7b8a'],
     tier: 0,
   },
   {
     id: 'sao_nhai', name: 'Sao nhái (Cosmos)', sci: 'Cosmos bipinnatus',
     info: 'Hoa cánh mỏng đung đưa, chịu đất nghèo và hạn, rất hợp người mới trồng. Ra hoa sau khoảng 50–90 ngày.',
     realDays: '50–90 ngày', bloomMinutes: 10, waterMinutes: 13, fadeMinutes: 240,
-    unlock: 150, seed: 16, sell: 24, exp: 4, level: 2, shape: 'daisy', colors: ['#f78fb3', '#ffd23f'],
+    unlock: 150, seed: 16, sell: 24, exp: 12, level: 2, shape: 'daisy', colors: ['#f78fb3', '#ffd23f'],
     tier: 0,
   },
   {
     id: 'cuc_hoa_mi', name: 'Cúc họa mi', sci: 'Chrysanthemum indicum (dạng hoa trắng)',
     info: 'Loài cúc nhỏ cánh trắng nhụy vàng, nở rộ ở Hà Nội vào đầu mùa đông (khoảng tháng 11) và chỉ kéo dài vài tuần.',
     realDays: '~3 tháng', bloomMinutes: 12, waterMinutes: 12, fadeMinutes: 240,
-    unlock: 0, seed: 18, sell: 28, exp: 4, level: 1, shape: 'daisy', colors: ['#ffffff', '#ffd23f'],
+    unlock: 0, seed: 18, sell: 28, exp: 12, level: 1, shape: 'daisy', colors: ['#ffffff', '#ffd23f'],
     tier: 1, wheel: true,
   },
   {
     id: 'pang_xe', name: 'Hoa păng-xê (Pansy)', sci: 'Viola × wittrockiana',
     info: 'Ưa mát và ẩm, cánh hoa có "mặt" đặc trưng. Ở Việt Nam trồng đẹp nhất ở Đà Lạt, Sa Pa. Ra hoa sau 60–90 ngày.',
     realDays: '60–90 ngày', bloomMinutes: 12, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 250, seed: 20, sell: 32, exp: 5, level: 3, shape: 'pansy', colors: ['#6a4c93', '#ffd23f'],
+    unlock: 250, seed: 20, sell: 32, exp: 15, level: 3, shape: 'pansy', colors: ['#6a4c93', '#ffd23f'],
     tier: 1,
   },
   {
     id: 'bim_bim', name: 'Hoa bìm bìm', sci: 'Ipomoea purpurea',
     info: 'Dây leo hoa hình phễu. Hoa nở vào sáng sớm và héo trong ngày nên còn gọi là "morning glory". Trong game chỉ nở 08:00–10:00.',
     realDays: '~2 tháng', bloomMinutes: 10, waterMinutes: 10, window: ['08:00', '10:00'], fadeMinutes: 240,
-    unlock: 0, seed: 18, sell: 28, exp: 4, level: 1, shape: 'trumpet', colors: ['#7b5cff', '#ffffff'],
+    unlock: 0, seed: 18, sell: 28, exp: 12, level: 1, shape: 'trumpet', colors: ['#7b5cff', '#ffffff'],
     tier: 2, wheel: true,
   },
   {
     id: 'huong_duong', name: 'Hướng dương', sci: 'Helianthus annuus',
     info: 'Cây non xoay theo hướng mặt trời; khi trưởng thành bông hoa thường quay về hướng đông. Cần nhiều nước và nắng. Ra hoa sau 70–120 ngày.',
     realDays: '70–120 ngày', bloomMinutes: 15, waterMinutes: 10, fadeMinutes: 300,
-    unlock: 320, seed: 25, sell: 40, exp: 6, level: 3, shape: 'sunflower', colors: ['#ffc300', '#6b3e26'],
+    unlock: 320, seed: 25, sell: 40, exp: 18, level: 3, shape: 'sunflower', colors: ['#ffc300', '#6b3e26'],
     tier: 1,
   },
   {
     id: 'moi_soi', name: 'Mõm sói', sci: 'Antirrhinum majus',
     info: 'Hoa mọc thành chùm dọc thân; bóp nhẹ hai bên bông hoa sẽ "há miệng" như mõm sói. Ra hoa sau 85–120 ngày.',
     realDays: '85–120 ngày', bloomMinutes: 20, waterMinutes: 13, fadeMinutes: 300,
-    unlock: 420, seed: 30, sell: 54, exp: 10, level: 4, shape: 'spike', colors: ['#ff6b6b', '#ffe066'],
+    unlock: 420, seed: 30, sell: 54, exp: 30, level: 4, shape: 'spike', colors: ['#ff6b6b', '#ffe066'],
     tier: 1,
   },
   {
     id: 'dong_tien', name: 'Hoa đồng tiền', sci: 'Gerbera jamesonii',
     info: 'Hoa to tròn như đồng xu, nhiều màu, hay dùng cắm lọ ngày Tết với ý nghĩa tài lộc. Ưa sáng, không ưa úng. Từ hạt ra hoa khoảng 4 tháng.',
     realDays: '100–130 ngày', bloomMinutes: 20, waterMinutes: 16, fadeMinutes: 240,
-    unlock: 0, seed: 32, sell: 56, exp: 10, level: 1, shape: 'sunflower', colors: ['#ff6b35', '#7a3b12'],
+    unlock: 0, seed: 32, sell: 56, exp: 30, level: 1, shape: 'sunflower', colors: ['#ff6b35', '#7a3b12'],
     tier: 2, wheel: true,
   },
   {
     id: 'cam_chuong', name: 'Hoa cẩm chướng', sci: 'Dianthus caryophyllus',
     info: 'Cánh hoa mép răng cưa xếp nhiều lớp, thơm nhẹ. Ưa khí hậu mát, trồng nhiều ở Đà Lạt. Từ hạt ra hoa khoảng 5 tháng.',
     realDays: '~150 ngày', bloomMinutes: 25, waterMinutes: 15, fadeMinutes: 240,
-    unlock: 0, seed: 34, sell: 64, exp: 12, level: 1, shape: 'pompom', colors: ['#ff4d6d', '#ffccd5'],
+    unlock: 0, seed: 34, sell: 64, exp: 36, level: 1, shape: 'pompom', colors: ['#ff4d6d', '#ffccd5'],
     tier: 2, wheel: true,
   },
   {
@@ -125,7 +125,7 @@ const SPECIES = [
     info: 'Quốc hoa không chính thức của Việt Nam. Sống trong nước nên rất nhanh khát. Hoa nở từ sáng sớm và khép lại vào buổi trưa – chiều.',
     realDays: '~60–90 ngày', bloomMinutes: 25, waterMinutes: 10, window: ['08:00', '11:00'], fadeMinutes: 180,
     regrow: { minutes: 15, harvests: 4 },
-    unlock: 700, seed: 60, sell: 95, exp: 14, level: 5, shape: 'lotus', colors: ['#ff8fab', '#ffd6e0'],
+    unlock: 700, seed: 60, sell: 95, exp: 42, level: 5, shape: 'lotus', colors: ['#ff8fab', '#ffd6e0'],
     tier: 2,
   },
   {
@@ -133,21 +133,21 @@ const SPECIES = [
     info: 'Thường trồng từ cành giâm, ưa nắng ít nhất 6 giờ/ngày, tưới vào gốc. Cành giâm ra hoa sau khoảng 2–3 tháng, sau đó ra hoa nhiều đợt.',
     realDays: '60–90 ngày (cành giâm)', bloomMinutes: 30, waterMinutes: 16, fadeMinutes: 300,
     regrow: { minutes: 15, harvests: 5 },
-    unlock: 900, seed: 80, sell: 122, exp: 17, level: 5, shape: 'rose', colors: ['#d00000', '#ff4d6d'],
+    unlock: 900, seed: 80, sell: 122, exp: 51, level: 5, shape: 'rose', colors: ['#d00000', '#ff4d6d'],
     tier: 2,
   },
   {
     id: 'thuoc_duoc', name: 'Hoa thược dược', sci: 'Dahlia pinnata',
     info: 'Hoa to nhiều lớp cánh nhọn, hay trồng chơi Tết ở miền Bắc. Trồng từ củ nhanh hơn từ hạt; từ hạt ra hoa khoảng 3–4 tháng.',
     realDays: '90–120 ngày', bloomMinutes: 30, waterMinutes: 16, fadeMinutes: 240,
-    unlock: 0, seed: 45, sell: 87, exp: 17, level: 1, shape: 'dahlia', colors: ['#d00060', '#ff8fc8'],
+    unlock: 0, seed: 45, sell: 87, exp: 51, level: 1, shape: 'dahlia', colors: ['#d00060', '#ff8fc8'],
     tier: 3, wheel: true,
   },
   {
     id: 'tulip', name: 'Tulip', sci: 'Tulipa gesneriana',
     info: 'Trồng từ củ, cần một mùa lạnh để ra hoa nên ở xứ nóng phải xử lý lạnh củ trước khi trồng. Thời gian từ trồng củ đến ra hoa khoảng 3–4 tháng.',
     realDays: '90–120 ngày', bloomMinutes: 40, waterMinutes: 20, fadeMinutes: 300,
-    unlock: 1100, seed: 50, sell: 114, exp: 26, level: 6, shape: 'cup', colors: ['#ff5d8f', '#ffb3c6'],
+    unlock: 1100, seed: 50, sell: 114, exp: 78, level: 6, shape: 'cup', colors: ['#ff5d8f', '#ffb3c6'],
     tier: 2,
   },
   {
@@ -155,7 +155,7 @@ const SPECIES = [
     info: 'Cây bụi hoa trắng nhỏ, rất thơm, thường nở về chiều tối; hay dùng ướp trà. Trong game nhài nở 15:00–17:00. Ra hoa nhiều đợt.',
     realDays: 'vài tháng (cành giâm)', bloomMinutes: 25, waterMinutes: 20, window: ['15:00', '17:00'], fadeMinutes: 240,
     regrow: { minutes: 15, harvests: 5 },
-    unlock: 0, seed: 90, sell: 130, exp: 16, level: 1, shape: 'bract', colors: ['#ffffff', '#fff7c2'],
+    unlock: 0, seed: 90, sell: 130, exp: 48, level: 1, shape: 'bract', colors: ['#ffffff', '#fff7c2'],
     tier: 3, wheel: true,
   },
   {
@@ -163,7 +163,7 @@ const SPECIES = [
     info: 'Phần "cánh hoa" sặc sỡ thực ra là lá bắc, hoa thật rất nhỏ màu trắng ở giữa. Rất chịu hạn – càng hơi khô càng ra nhiều hoa.',
     realDays: '~6 tháng (cành giâm)', bloomMinutes: 40, waterMinutes: 33, fadeMinutes: 300,
     regrow: { minutes: 25, harvests: 6 },
-    unlock: 1400, seed: 120, sell: 192, exp: 29, level: 7, shape: 'bract', colors: ['#c9184a', '#ff4d9d'],
+    unlock: 1400, seed: 120, sell: 192, exp: 87, level: 7, shape: 'bract', colors: ['#c9184a', '#ff4d9d'],
     tier: 3,
   },
   {
@@ -171,21 +171,21 @@ const SPECIES = [
     info: 'Hoa mọc thành chùm tròn như quả cầu. Màu hoa đổi theo độ chua của đất: đất chua cho hoa xanh, đất kiềm cho hoa hồng. Ưa mát, nhiều nước.',
     realDays: '1–2 năm (cành giâm)', bloomMinutes: 45, waterMinutes: 17, fadeMinutes: 240,
     regrow: { minutes: 30, harvests: 5 },
-    unlock: 0, seed: 130, sell: 211, exp: 33, level: 1, shape: 'cluster', colors: ['#5aa9e6', '#c8e7ff'],
+    unlock: 0, seed: 130, sell: 211, exp: 99, level: 1, shape: 'cluster', colors: ['#5aa9e6', '#c8e7ff'],
     tier: 4, wheel: true,
   },
   {
     id: 'oai_huong', name: 'Oải hương', sci: 'Lavandula angustifolia',
     info: 'Ưa nắng, đất thoát nước tốt và khá khô, sợ úng. Trồng từ hạt thường mất gần một năm mới ra hoa. Hương thơm giúp thư giãn.',
     realDays: '~1 năm', bloomMinutes: 55, waterMinutes: 47, fadeMinutes: 300,
-    unlock: 1800, seed: 110, sell: 220, exp: 44, level: 8, shape: 'spike', colors: ['#7b2cbf', '#c77dff'],
+    unlock: 1800, seed: 110, sell: 220, exp: 132, level: 8, shape: 'spike', colors: ['#7b2cbf', '#c77dff'],
     tier: 3,
   },
   {
     id: 'xuong_rong', name: 'Xương rồng ra hoa', sci: 'Echinopsis spp.',
     info: 'Cần rất ít nước. Nhiều loài xương rồng nở hoa to rực rỡ nhưng mỗi bông chỉ giữ được khoảng một ngày.',
     realDays: '2–3 năm', bloomMinutes: 55, waterMinutes: 71, fadeMinutes: 300,
-    unlock: 2400, seed: 150, sell: 271, exp: 48, level: 9, shape: 'cactus', colors: ['#ff70a6', '#2d6a4f'],
+    unlock: 2400, seed: 150, sell: 271, exp: 144, level: 9, shape: 'cactus', colors: ['#ff70a6', '#2d6a4f'],
     tier: 3,
   },
   {
@@ -193,7 +193,7 @@ const SPECIES = [
     info: '"Nữ hoàng bóng đêm": nở về đêm, hương rất thơm và tàn trước khi trời sáng. Trong game, quỳnh chỉ nở vào giờ cuối ca (16:00–17:00) – hết giờ là tàn!',
     realDays: '2–3 năm (cành giâm)', bloomMinutes: 90, waterMinutes: 68, window: ['16:00', '17:00'], fadeMinutes: 60,
     regrow: { minutes: 55, harvests: 3 },
-    unlock: 3500, seed: 260, sell: 476, exp: 86, level: 10, shape: 'night', colors: ['#ffffff', '#fff3b0'],
+    unlock: 3500, seed: 260, sell: 476, exp: 258, level: 10, shape: 'night', colors: ['#ffffff', '#fff3b0'],
     tier: 4,
   },
   {
@@ -201,7 +201,7 @@ const SPECIES = [
     info: 'Biểu tượng Tết miền Nam. Nhà vườn tuốt lá khoảng một tháng trước Tết để mai nở đúng dịp. Hoa 5 cánh vàng rực.',
     realDays: 'nhiều năm (cây cảnh)', bloomMinutes: 70, waterMinutes: 37, fadeMinutes: 240,
     regrow: { minutes: 35, harvests: 4 },
-    unlock: 0, seed: 300, sell: 482, exp: 72, level: 1, shape: 'branch', colors: ['#ffd23f', '#ff9f1c'],
+    unlock: 0, seed: 300, sell: 482, exp: 216, level: 1, shape: 'branch', colors: ['#ffd23f', '#ff9f1c'],
     tier: 5, wheel: true,
   },
   {
@@ -209,7 +209,7 @@ const SPECIES = [
     info: 'Biểu tượng Tết miền Bắc, nổi tiếng đào Nhật Tân. Hoa nở trên cành khẳng khiu khi cây rụng lá vào cuối đông.',
     realDays: 'nhiều năm (cây cảnh)', bloomMinutes: 70, waterMinutes: 37, fadeMinutes: 240,
     regrow: { minutes: 35, harvests: 4 },
-    unlock: 0, seed: 300, sell: 482, exp: 72, level: 1, shape: 'branch', colors: ['#ff8fab', '#ffe5ec'],
+    unlock: 0, seed: 300, sell: 482, exp: 216, level: 1, shape: 'branch', colors: ['#ff8fab', '#ffe5ec'],
     tier: 6, wheel: true,
   },
   {
@@ -217,21 +217,21 @@ const SPECIES = [
     info: 'Loài lan phổ biến nhất ngày Tết. Rễ khí sinh, sợ úng – chỉ tưới khi giá thể gần khô. Một cành hoa có thể bền 2–3 tháng.',
     realDays: '2–3 năm', bloomMinutes: 90, waterMinutes: 79, fadeMinutes: 600,
     regrow: { minutes: 55, harvests: 4 },
-    unlock: 5000, seed: 400, sell: 652, exp: 99, level: 12, shape: 'orchid', colors: ['#f72585', '#ffffff'],
+    unlock: 5000, seed: 400, sell: 652, exp: 297, level: 12, shape: 'orchid', colors: ['#f72585', '#ffffff'],
     tier: 4,
   },
   {
     id: 'cuc_dai', name: 'Hoa cúc dại', sci: 'Bellis perennis',
     info: 'Bông cúc nhỏ mọc hoang ven đường, cánh trắng viền hồng, nhuỵ vàng. Bé xíu nhưng rất bền bỉ.',
     realDays: '~8–10 tuần', bloomMinutes: 5, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 0, seed: 8, sell: 11, exp: 1, level: 1, shape: 'daisy', colors: ['#fff0f6', '#ffd23f'],
+    unlock: 0, seed: 8, sell: 11, exp: 3, level: 1, shape: 'daisy', colors: ['#fff0f6', '#ffd23f'],
     tier: 0, wheel: true,
   },
   {
     id: 'su_quan_tu', name: 'Hoa sử quân tử', sci: 'Combretum indicum',
     info: 'Dây leo hoa chùm, thơm về chiều. Hoa đổi màu từ trắng sang hồng rồi đỏ sau vài ngày nên một chùm có nhiều màu.',
     realDays: 'vài tháng (cành giâm)', bloomMinutes: 10, waterMinutes: 10, fadeMinutes: 240,
-    unlock: 0, seed: 20, sell: 30, exp: 4, level: 1, shape: 'cluster', colors: ['#ff4d6d', '#ffffff'],
+    unlock: 0, seed: 20, sell: 30, exp: 12, level: 1, shape: 'cluster', colors: ['#ff4d6d', '#ffffff'],
     tier: 1, wheel: true,
   },
   {
@@ -239,7 +239,7 @@ const SPECIES = [
     info: 'Biểu tượng mùa xuân Nhật Bản. Ở Việt Nam có mai anh đào Đà Lạt nở hồng rực vào khoảng tháng 1–2.',
     realDays: 'nhiều năm (cây cảnh)', bloomMinutes: 40, waterMinutes: 27, fadeMinutes: 240,
     regrow: { minutes: 25, harvests: 5 },
-    unlock: 0, seed: 140, sell: 212, exp: 29, level: 1, shape: 'branch', colors: ['#ffc8dd', '#ffe5ec'],
+    unlock: 0, seed: 140, sell: 212, exp: 87, level: 1, shape: 'branch', colors: ['#ffc8dd', '#ffe5ec'],
     tier: 3, wheel: true,
   },
   {
@@ -247,14 +247,14 @@ const SPECIES = [
     info: 'Loài sen hoa vàng nhạt có nguồn gốc châu Mỹ, hiếm gặp ở Việt Nam. Giống sen hồng, hoa nở buổi sáng.',
     realDays: '~3 tháng', bloomMinutes: 45, waterMinutes: 14, window: ['08:00', '11:00'], fadeMinutes: 180,
     regrow: { minutes: 20, harvests: 5 },
-    unlock: 0, seed: 220, sell: 319, exp: 39, level: 1, shape: 'lotus', colors: ['#ffd23f', '#fff3b0'],
+    unlock: 0, seed: 220, sell: 319, exp: 117, level: 1, shape: 'lotus', colors: ['#ffd23f', '#fff3b0'],
     tier: 4, wheel: true,
   },
   {
     id: 'uu_dam', name: 'Hoa ưu đàm', sci: 'Udumbara (truyền thuyết)',
     info: 'Theo truyền thuyết Phật giáo, ưu đàm 3000 năm mới nở một lần. Ngoài đời, thứ hay bị gọi nhầm là "hoa ưu đàm" thực ra là trứng của loài côn trùng cánh gân.',
     realDays: '3000 năm (truyền thuyết)', bloomMinutes: 90, waterMinutes: 68, fadeMinutes: 120,
-    unlock: 0, seed: 500, sell: 752, exp: 99, level: 1, shape: 'star', colors: ['#ffffff', '#c8e7ff'],
+    unlock: 0, seed: 500, sell: 752, exp: 297, level: 1, shape: 'star', colors: ['#ffffff', '#c8e7ff'],
     tier: 6, wheel: true,
   },
 ];
@@ -335,7 +335,10 @@ const RULES = {
   fadedValue: 0.4,
   stealShare: 0.5,
   petSleepMs: 30 * 60 * 1000, // pet chặn trộm xong ngủ 30 phút (thời gian thực)
-  waterExp: 1, // chỉ cộng khi tưới cây đang khát (nước < thirstyAt)
+  waterExp: 3, // EXP mỗi lần tự tưới khi đất đã khô dưới waterExpBelow% (tránh tưới liên tục để cày)
+  waterExpBelow: 50,
+  plantExp: 2, // EXP mỗi lần gieo hạt
+  fertExpPerMin: 1 / 3, // EXP khi bón phân = số phút rút ngắn / 3 (phân đắt cho nhiều EXP hơn)
 };
 
 /** EXP cần để lên cấp tiếp theo. */

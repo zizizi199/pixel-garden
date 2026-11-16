@@ -21,6 +21,9 @@
   let fertKind = 'phan_bon'; // loại phân công cụ 🌱 đang dùng
   let arenaOpened = null; // id trận đã tự mở đấu trường
   let arenaShown = false; // đấu trường đang hiện đè lên vườn (thanh cao lên)
+  let tall = null; // thanh vườn đang cao lên cho: 'duel' (đấu trường) | 'game' (mini game)
+  const FISH = {};
+  let treeData = null; // Thần mộc: dữ liệu đầy đủ khi mở bảng
 
   const STAGE_VI = { seed: 'Hạt', sprout: 'Mầm', young: 'Cây non', bud: 'Nụ', bloom: 'Đang nở', faded: 'Đã tàn', dead: 'Đã chết', empty: 'Trống' };
   const TOOLS = [
@@ -46,7 +49,7 @@
     if (!r.ok) Sound.play('error');
     else Sound.play({ water: 'water', waterAll: 'water', harvest: 'harvest', plant: 'plant', buy: 'coin', buySlot: 'coin', fertilize: 'fert', remove: 'remove', setPet: 'pet', placePot: 'plant', placeDecor: 'plant' }[a.type] || 'click');
     if (r.levelUp) setTimeout(() => Sound.play('levelup'), 350);
-    if (r.ok && anchor && (r.money || r.exp)) floatText(anchor, `+${r.money} xu  +${r.exp} EXP`);
+    if (r.ok && anchor && (r.money || r.exp)) floatText(anchor, [r.money ? `+${r.money} xu` : '', r.exp ? `+${r.exp} EXP` : ''].filter(Boolean).join('  '));
     if (r.ok && anchor) burst(anchor, a.type === 'water' ? 'drop' : a.type === 'harvest' ? 'petal' : null);
     if (r.levelUp) setTimeout(() => toast(`🎉 Lên cấp ${V.level}! Có thể đã mở khoá cây/đồ mới.`), 900);
     return r;
@@ -97,7 +100,13 @@
   function setMode(m) {
     mode = m;
     document.body.classList.remove('mode-collapsed', 'mode-bar', 'mode-panel', 'mode-arena');
-    if (m !== 'arena') { arenaShown = false; const av = $('#arena-view'); if (av) av.remove(); }
+    if (m !== 'arena') {
+      if (tall && m === 'bar') api.setLayout('arena'); // đấu trường / mini game vẫn đang mở → giữ thanh cao
+      else if (!tall) {
+        arenaShown = false; const av = $('#arena-view'); if (av) av.remove();
+        const gv0 = $('#game-view'); if (gv0) { gv0.remove(); if (window.MiniGames) MiniGames.stop(); }
+      }
+    }
     document.body.classList.add(`mode-${m}`);
     $('#tab').classList.toggle('hidden', m !== 'collapsed');
     $('#app').classList.toggle('hidden', m === 'collapsed');
@@ -106,6 +115,12 @@
     renderMenu();
   }
   function openPanel(name, arg = null, subTab = null) {
+    if (tall) { // mở bảng khác: tạm đóng đấu trường / dừng mini game (thanh cao)
+      if (tall === 'game' && window.MiniGames) MiniGames.stop();
+      const g0 = $('#game-view'); if (g0) g0.remove();
+      const a0 = $('#arena-view'); if (a0) a0.remove();
+      arenaShown = false; tall = null;
+    }
     panel = name; panelArg = arg; sub = subTab;
     if (mode !== 'panel') api.setLayout('panel');
     $('#panel').classList.remove('hidden');
@@ -293,7 +308,7 @@
           const pct = Math.max(0, Math.min(100, Math.round((s.progress || 0) * 100)));
           html += `<span>${s.waiting ? `chờ ${esc(s.window[0])}` : dur(s.bloomInMin)}</span><i class="grow"><b style="width:${pct}%"></b></i>`;
         }
-        html += `<i class="water${s.thirsty ? ' low' : ''}" title="Nước ${s.water}%"><b style="width:${s.water}%"></b></i>`;
+        if (s.stage !== 'bloom') html += `<i class="water${s.thirsty ? ' low' : ''}" title="Nước ${s.water}%"><b style="width:${s.water}%"></b></i>`;
         tm.innerHTML = html;
         d.appendChild(tm);
       }
@@ -343,7 +358,7 @@
     if (t === 'clear') act({ type: 'clearTheft', slot: i });
     if (t === 'water') act({ type: 'water', slot: i }, elx);
     if (t === 'harvest') act({ type: 'harvest', slot: i }, elx);
-    if (t === 'fert') act({ type: 'fertilize', slot: i, item: fertKind });
+    if (t === 'fert') act({ type: 'fertilize', slot: i, item: fertKind }, elx);
     if (t === 'shovel' && !needConfirm(`rm${i}`, `Bấm lần nữa để nhổ ${s.name}`)) act({ type: 'remove', slot: i });
     if (panel === 'detail') { panelArg = i; renderPanel(); }
     renderSlots();
@@ -353,7 +368,7 @@
   function renderHouse() {
     const V = gv();
     const box = $('#house');
-    $('#slots').style.right = V.house ? (V.scene && V.scene.object ? '235px' : '140px') : (V.scene && V.scene.object ? '108px' : '6px');
+    $('#slots').style.right = `${(V.house ? (V.scene && V.scene.object ? 235 : 140) : (V.scene && V.scene.object ? 108 : 6)) + 82}px`; // +82: ao câu cá
     if (!V.house) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     const lv = V.house.level;
@@ -396,6 +411,9 @@
       spot.title = `${CAT.sceneObjects.find((x) => x.id === id)?.name || 'Cảnh vườn'} – bấm để đổi`;
     }
     spot.style.right = V.house ? '130px' : '8px';
+    const pond = $('#pond');
+    pond.style.right = `${(V.house ? 130 : 8) + (id ? 100 : 0) + 2}px`;
+    pond.classList.toggle('hidden', !!V.visit);
     spot.onclick = () => { if (!V.visit) openPanel('bag', null, 'scene'); };
     const sky = $('#sky');
     const bg = V.scene && V.scene.background || '';
@@ -427,6 +445,10 @@
       else if (x.stage === 'faded') list.push({ slot: x.i, level: 'red', text: `${name} đã tàn, thu hoạch ngay`, act: { type: 'harvest', slot: x.i }, label: 'Thu hoạch' });
       if (x.thirsty && x.stage !== 'dead') list.push({ slot: x.i, level: 'red', text: `${name} đang khát (${x.water}%)`, act: { type: 'water', slot: x.i }, label: 'Tưới' });
       if (x.theftMark) list.push({ slot: x.i, level: 'info', text: `Ô ${x.i + 1}: ${x.theftMark.by} đã hái trộm`, act: { type: 'clearTheft', slot: x.i }, label: 'Dọn' });
+    }
+    if (L && L.mode === 'group' && L.role && L.tree) {
+      if (L.tree.claimable) list.unshift({ level: 'red', text: `🌳 Thần mộc có ${L.tree.claimable} rương mốc chờ nhận!`, tree: true, label: 'Nhận' });
+      else if (!L.tree.watered && L.tree.growth < L.tree.max) list.push({ level: 'info', text: '🌳 Hôm nay bạn chưa tưới Thần mộc của nhóm.', tree: true, label: 'Tưới' });
     }
     if (V.wheel.free) list.unshift({ level: 'red', text: '🎡 Có 1 lượt quay may mắn miễn phí hôm nay!', open: 'wheel', label: 'Quay' });
     if (V.daily.available) list.unshift({ level: 'red', text: '🎁 Quà hằng ngày đã sẵn sàng!', open: 'gift', label: 'Mở quà' });
@@ -634,19 +656,12 @@
   function renderNotify(body) {
     const list = alerts();
     if (!list.length) { body.innerHTML = '<div class="note">Không có việc gì cần làm. Vườn đang ổn 🌱</div>'; return; }
-    const top = document.createElement('div'); top.className = 'admin-row'; top.style.marginBottom = '6px';
-    const doAll = document.createElement('button'); doAll.className = 'primary'; doAll.textContent = 'Làm hết (tưới + thu hoạch)';
-    doAll.onclick = async () => {
-      for (const a of alerts()) if (a.act && (a.act.type === 'water' || a.act.type === 'harvest')) await api.action(a.act);
-      Sound.play('harvest'); toast('Đã xử lý hết.');
-    };
-    top.appendChild(doAll); body.appendChild(top);
     const ul = document.createElement('ul'); ul.className = 'alerts';
     for (const a of list) {
       const li = document.createElement('li'); li.className = a.level;
       li.innerHTML = `<i class="dot"></i><span>${esc(a.text)}</span>`;
       const b = document.createElement('button'); b.textContent = a.label;
-      b.onclick = () => (a.open ? openPanel(a.open, null, 'seeds') : act(a.act));
+      b.onclick = () => (a.tree ? openTree() : a.open ? openPanel(a.open, null, 'seeds') : act(a.act));
       li.appendChild(b); ul.appendChild(li);
     }
     body.appendChild(ul);
@@ -713,16 +728,93 @@
     } else if (back) back.remove();
   }
 
+  // ------------------------------------------------------------ mini game
+  function gameCtx() {
+    return { api, toast, Sound, esc, Sprites, SP, FISH, canvasOf, V: () => V,
+      enterTall: () => {
+        if (arenaShown) hideArena();
+        panel = null; $('#panel').classList.add('hidden');
+        tall = 'game';
+        let v = $('#game-view'); if (!v) { v = document.createElement('div'); v.id = 'game-view'; $('#garden').appendChild(v); }
+        if (mode !== 'arena') api.setLayout('arena');
+        return v;
+      },
+      exitTall: () => { const v = $('#game-view'); if (v) v.remove(); tall = null; if (mode === 'arena') api.setLayout('bar'); } };
+  }
+  async function openTree() {
+    if (!L || L.mode !== 'group' || !L.role) { toast('Thần mộc là cây chung của nhóm – hãy vào nhóm ở 🌐 Bạn bè & chat.', true); return; }
+    treeData = null; openPanel('tree');
+    const r = await api.lan({ type: 'treeState' });
+    if (!r.ok) { toast(r.msg, true); return; }
+    treeData = r.tree; if (panel === 'tree') renderPanel();
+  }
+  async function treeAct(a) {
+    const r = await api.lan(a);
+    toast(r.msg, !r.ok);
+    Sound.play(r.ok ? (a.type === 'treeClaim' ? 'levelup' : a.type === 'treeWater' ? 'water' : 'fert') : 'error');
+    const s = await api.lan({ type: 'treeState' });
+    if (s.ok) treeData = s.tree;
+    if (panel === 'tree') renderPanel();
+  }
+
+  function playGame(id) {
+    if (L && L.duel && (L.duel.status === 'playing')) { toast('Đang có trận đấu thú – đấu xong rồi chơi nhé!', true); return; }
+    if (panel) closePanel();
+    if (id === 'bugs') setTimeout(() => MiniGames.bugs(gameCtx()), panel ? 300 : 0);
+    if (id === 'memory') MiniGames.memory(gameCtx());
+    if (id === 'fish') MiniGames.fishing(gameCtx());
+  }
+  function renderGames(body) {
+    const note = document.createElement('div'); note.className = 'note';
+    note.textContent = 'Chơi vui kiếm thêm đồ. Mỗi trò có số lượt mỗi ngày (làm mới lúc 0 giờ).';
+    body.appendChild(note);
+    const g = grid(body);
+    const mg = V.minigames || {};
+    const list = [
+      ['bugs', '🐛', 'Bắt sâu', 'Sâu, ốc bò lên chậu – bấm trúng trước khi chúng gặm lá. 30 giây, càng về sau càng nhanh. Bọ vàng 🪲 hiếm rơi hạt giống quý.', 'Phân bón: điểm càng cao phân càng xịn (≥45 điểm: Phân siêu tốc).'],
+      ['memory', '🃏', 'Ghép cặp hoa', 'Lật 2 thẻ giống nhau để ghép 6 cặp hoa, tối đa 14 lượt lật.', 'Mỗi cặp = 1 hạt loài đó; ≤9 lượt được ⭐⭐⭐ và thêm 1 hạt.'],
+      ['fish', '🎣', 'Câu cá ao vườn', 'Chờ phao chìm thì giật cần, rồi giữ chuột để giữ cá trong vùng xanh. Cá chia bậc Common → Secret; pet bậc cao giúp gặp cá hiếm, mèo giúp kéo dễ hơn.', 'Cá bán ra xu (Kho đồ › Cá); thỉnh thoảng câu được rương chậu / chưởng lực.'],
+    ];
+    if (L && L.mode === 'group' && L.role) {
+      const t = L.tree;
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = '🌳'; pic.style.setProperty('--c', '#52b788');
+      g.appendChild(card({ pic, title: 'Thần mộc (cả nhóm)', lines: ['Cả nhóm cùng nuôi 1 cây: mỗi ngày tưới 1 lần và góp phân bón. Cây tới mốc nào, ai đã góp sức nhận rương mốc đó.',
+        t ? `Mùa ${t.season}: ${t.growth}/${t.max} điểm${t.claimable ? ` · <b>🎁 ${t.claimable} rương chờ nhận</b>` : ''}${t.watered ? '' : ' · <b>chưa tưới hôm nay</b>'}` : ''],
+        buttons: [{ label: '🌳 Tới Thần mộc', primary: true, onClick: openTree }] }));
+    }
+    for (const [id, icon, name, desc, reward] of list) {
+      const st = mg[id] || { left: 0, limit: 0, best: 0 };
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = icon; pic.style.setProperty('--c', '#ffd23f');
+      g.appendChild(card({ pic, title: name, lines: [desc, `🎁 ${reward}`, `Còn <b>${st.left}</b>/${st.limit} lượt hôm nay${st.best ? ` · kỷ lục ${st.best}` : ''}`],
+        buttons: [{ label: '▶ Chơi', primary: true, disabled: !st.left, onClick: () => playGame(id) }] }));
+    }
+  }
+  function renderFishBag(body) {
+    const list = CAT.fish.filter((f) => (V.inventory.fish || {})[f.id] > 0);
+    if (!list.length) { body.innerHTML = '<div class="note">Chưa có con cá nào. Bấm vào ao 🪷 cạnh nhà thú hoặc 🎮 › Câu cá ao vườn.</div>'; return; }
+    const total = list.reduce((s, f) => s + f.price * V.inventory.fish[f.id], 0);
+    const head = document.createElement('div'); head.className = 'note'; head.textContent = `Bán hết cá được ${total} xu.`;
+    body.appendChild(head);
+    const g = grid(body);
+    for (const f of list) {
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = f.icon; pic.style.setProperty('--c', CAT.tiers[f.tier].color);
+      g.appendChild(card({ pic, title: f.name, tier: f.tier, lines: [`Số lượng: <b>${V.inventory.fish[f.id]}</b>`, `<span class="price">${f.price} xu</span>/con`],
+        buttons: [{ label: 'Bán 1', onClick: () => act({ type: 'sellFish', id: f.id }) }, { label: 'Bán hết', primary: true, onClick: () => act({ type: 'sellFish', id: f.id, all: true }) }] }));
+    }
+  }
+
   /** Đấu trường hiện đè lên phần vườn của mình; thanh vườn cao lên để thấy hết, không phải cuộn. */
   function showArena() {
     if (!L || !L.duel) return;
+    if (tall === 'game') { MiniGames.stop(); const g0 = $('#game-view'); if (g0) g0.remove(); }
+    tall = 'duel';
     panel = null; $('#panel').classList.add('hidden');
     arenaShown = true;
     if (mode !== 'arena') api.setLayout('arena');
     setTimeout(renderArena, 0);
   }
   function hideArena() {
-    arenaShown = false;
+    arenaShown = false; tall = null;
     const av = $('#arena-view'); if (av) av.remove();
     if (mode === 'arena') api.setLayout('bar');
   }
@@ -751,6 +843,9 @@
       join.append(code, go); controls.appendChild(join);
       return;
     }
+    const treeRow = document.createElement('div'); treeRow.className = 'lan-row';
+    const tb = document.createElement('button'); tb.textContent = `🌳 Thần mộc của nhóm${L.tree && (L.tree.claimable || !L.tree.watered) ? ' ●' : ''}`;
+    tb.onclick = openTree; treeRow.appendChild(tb); controls.appendChild(treeRow);
     if (L.duel) {
       const back = document.createElement('div'); back.className = 'lan-row';
       const go = document.createElement('button'); go.className = 'primary'; go.textContent = '⚔ Quay lại đấu trường';
@@ -901,9 +996,9 @@
   // ------------------------------------------------------------ panel
   const PANEL_TABS = {
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
-    bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực']],
+    bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực'], ['fish', 'Cá']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
 
   function renderPanel() {
     if (!panel) return;
@@ -931,7 +1026,8 @@
     const ch = body.querySelector('.lan-chat-history');
     chatScroll = ch ? { top: ch.scrollTop, atBottom: ch.scrollHeight - ch.scrollTop - ch.clientHeight < 12 } : null;
     body.innerHTML = '';
-    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan }[panel])(body);
+    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan, games: renderGames,
+      tree: (b) => GroupTree.render(b, { tree: treeData, CAT, V, run: treeAct }) }[panel])(body);
     body.scrollTop = scroll;
   }
 
@@ -1208,6 +1304,7 @@
   function renderBag(body) {
     if (sub === 'scene') { renderSceneCatalog(body, false); return; }
     if (sub === 'powers') { renderPowers(body, false); return; }
+    if (sub === 'fish') { renderFishBag(body); return; }
     if (sub === 'seeds') {
       const ts = targetSlot();
       const list = CAT.species.filter((x) => (V.inventory.seeds[x.id] || 0) > 0);
@@ -1278,7 +1375,7 @@
     const g = grid(body); g.classList.add('wiki');
     const focus = typeof panelArg === 'string' ? panelArg : null;
     for (const sp of CAT.species) {
-      const tags = [`Ngoài đời: ${sp.realDays}`, `Game: nở sau ${dur(sp.bloomMinutes)}`, `Cạn nước sau ${dur(sp.waterMinutes)}`, `~${waterTimes(sp)} lần tưới/ngày`, `Giữ hoa ${dur(sp.fadeMinutes)}`];
+      const tags = [`Ngoài đời: ${sp.realDays}`, `Game: nở sau ${dur(sp.bloomMinutes)}`, `Cạn nước sau ${dur(sp.waterMinutes)}`, `~${waterTimes(sp)} lần tưới/ngày`, 'Nở rồi giữ mãi tới khi thu hoạch (không cần tưới)'];
       if (sp.window) tags.push(`Nở ${sp.window[0]}–${sp.window[1]}`);
       if (sp.regrow) tags.push(`Lâu năm: ra nụ lại sau ${dur(sp.regrow.minutes)}, ${sp.regrow.harvests} lần`);
       tags.push(`Mở ở cấp ${sp.level}`);
@@ -1614,6 +1711,9 @@
   CAT.pets.forEach((x) => { PET[x.id] = x; });
   (CAT.powers || []).forEach((x) => { POWERS[x.id] = x; });
   CAT.items.forEach((x) => { ITEM[x.id] = x; });
+  (CAT.fish || []).forEach((x) => { FISH[x.id] = x; });
+  $('#games-btn').onclick = () => { Sound.play('open'); return panel === 'games' ? closePanel() : openPanel('games'); };
+  $('#pond').onclick = () => playGame('fish');
   Sprites.setPetCatalog(CAT.pets);
   Sprites.setPacks(PACKS, V.settings.usePacks, () => renderAll());
   Sprites.paint($('#tab-icon'), Sprites.plant(SP.van_tho, 'bloom'));
@@ -1639,7 +1739,7 @@
     document.body.classList.toggle('pos-bottom', position !== 'top');
     setMode(m);
     if (m === 'panel' && panel) { $('#panel').classList.remove('hidden'); renderPanel(); }
-    if (m === 'arena') { arenaShown = true; renderArena(); syncArena(); } else syncArena();
+    if (m === 'arena' && tall !== 'game') { arenaShown = true; renderArena(); syncArena(); } else syncArena();
   });
 
   $('#collapse').onclick = () => { panel = null; api.setLayout('collapsed'); };

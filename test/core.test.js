@@ -70,9 +70,11 @@ test('hoa mười giờ chỉ nở trong khung 10:00–15:00', () => {
   assert.ok(!p.bloomed && p.waiting, 'nụ chờ');
   G.advance(st, at(16, '10:02'));
   assert.ok(p.bloomed, 'nở lúc 10h');
-  p.water = 100;
-  G.advance(st, at(16, '15:05'));
-  assert.ok(p.faded, 'hết khung giờ thì khép/tàn');
+  p.water = 0;
+  G.advance(st, at(17, '16:00'));
+  assert.ok(p.bloomed && !p.faded && !p.dead, 'hoa đã nở thì không tàn, không khát, không chết dù hết khung giờ / qua ngày');
+  assert.equal(G.water(st, 0).ok, false, 'hoa nở không cần tưới');
+  assert.equal(G.view(st, at(17, '16:00')).slots[0].thirsty, false);
 });
 
 test('thiếu nước lâu thì chết', () => {

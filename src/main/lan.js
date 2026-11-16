@@ -357,7 +357,7 @@ class LanRoom {
     const r = this.role === 'host'
       ? await this.routeVisit('host', this.config.alias, target, kind, slot)
       : await this.rpc({ op: 'visit', target, kind, slot }, 20000);
-    if (r.ok) await this.applyReward(kind === 'water' ? { money: 0, exp: 2 } : r.loot);
+    if (r.ok) await this.applyReward(kind === 'water' ? { money: 0, exp: 3 } : r.loot);
     this.emit();
     return r;
   }

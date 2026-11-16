@@ -12,6 +12,7 @@ const {
 
 const C = require('../core/catalog');
 const G = require('../core/garden');
+const MG = require('../core/minigames');
 const store = require('../core/store');
 const D = require('../core/decor');
 const { LanRoom, publicGarden } = require('./lan');
@@ -217,6 +218,9 @@ const ACTIONS = {
   harvest: (a) => G.harvest(state, a.slot),
   fertilize: (a) => G.fertilize(state, a.slot, a.item),
   equipPower: (a) => G.equipPower(state, a.id),
+  gameStart: (a) => MG.start(state, a.game),
+  gameFinish: (a) => MG.finish(state, a.game, a.token, a.result && typeof a.result === 'object' ? a.result : {}),
+  sellFish: (a) => MG.sellFish(state, a.id, a.all === true),
   remove: (a) => G.removePlant(state, a.slot),
   clearTheft: (a) => G.clearTheft(state, a.slot),
   buy: (a) => G.buy(state, a.kind, a.id, a.qty),
@@ -432,7 +436,7 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle('init', () => ({
-    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, powers: C.POWERS, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
+    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, powers: C.POWERS, fish: MG.FISH, games: { limits: MG.LIMITS, names: MG.NAMES }, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
     view: G.view(state),
     packs: scanPacks(),
     lan: lan.status(),
@@ -470,6 +474,31 @@ app.whenReady().then(async () => {
         if (a.type === 'duelPick') return await lan.duelPick(a.idx);
         if (a.type === 'duelForfeit') return await lan.duelForfeit();
         if (a.type === 'duelClose') return lan.closeDuel();
+        if (a.type === 'treeState') return await lan.treeState();
+        if (a.type === 'treeWater') {
+          const r = await lan.treeGive('water', 0);
+          if (r.ok) { G.gainExp(state, 5); r.msg += ' +5 EXP'; persist(); push(); }
+          return r;
+        }
+        if (a.type === 'treeFert') { // góp phân của mình cho cây chung
+          const it = C.ITEMS_BY_ID[a.item];
+          if (!it || !it.fert) return { ok: false, msg: 'Loại phân không hợp lệ.' };
+          if ((state.inventory.items[it.id] || 0) <= 0) return { ok: false, msg: `Bạn không có ${it.name}.` };
+          const r = await lan.treeGive('fert', it.fert);
+          if (r.ok) {
+            state.inventory.items[it.id] -= 1;
+            const exp = Math.max(1, Math.round(it.fert * C.RULES.fertExpPerMin));
+            G.gainExp(state, exp); r.msg += ` +${exp} EXP`; persist(); push();
+          }
+          return r;
+        }
+        if (a.type === 'treeClaim') {
+          const r = await lan.treeClaim(a.milestone);
+          if (!r.ok) return r;
+          const g2 = G.treeChest(state, r.milestone);
+          persist(); push(); updateTray();
+          return g2;
+        }
         return { ok: false, msg: 'Hành động nhóm không hợp lệ.' };
       }
       if (a.type === 'host') return { ok: false, msg: 'Phòng LAN đã tắt, hãy dùng phòng Internet.' };

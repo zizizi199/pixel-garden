@@ -5,6 +5,7 @@
  *
  * Mọi hàm hành động đều sửa `state` tại chỗ và trả về { ok, msg, ... }.
  */
+const MG = require('./minigames');
 const C = require('./catalog');
 const S = require('./schedule');
 const D = require('./decor');
@@ -22,12 +23,13 @@ function createState(now = Date.now()) {
     slots: Array.from({ length: C.RULES.startSlots }, () => ({ pot: 'nhua', plant: null, decor: [null, null, null, null] })),
     house: { level: 1, decor: { roof: null, window: null, side: null, front: null } },
     scene: { object: null, background: null },
-    inventory: { pots: {}, decor: {}, houseDecor: {}, sceneObjects: {}, backgrounds: {}, items: { phan_bon: 3 }, powers: { cu_huc: 1 }, seeds: { ...C.RULES.starterSeeds } },
+    inventory: { pots: {}, decor: {}, houseDecor: {}, sceneObjects: {}, backgrounds: {}, items: { phan_bon: 3 }, powers: { cu_huc: 1 }, fish: {}, seeds: { ...C.RULES.starterSeeds } },
     unlocked: { species: C.SPECIES.filter((x) => !x.unlock && !x.wheel).map((x) => x.id), pots: ['nhua'], decor: [], pets: [], sceneObjects: [], backgrounds: [] },
     wheel: { spins: 0, pityEpic: 0, pityLeg: 0, freeDay: null, history: [], pending: null },
     daily: { last: null, streak: 0 },
     pets: { owned: [], active: null, status: {} }, // status[id] = { sleepUntil, blocks }
     arena: { power: 'cu_huc', wins: 0, losses: 0 }, // Đấu trường thú (nhóm Supabase)
+    minigames: { day: null, plays: {}, pending: null, best: {} }, // Bắt sâu, Ghép cặp, Câu cá (src/core/minigames.js)
     unlocks: {},
     stats: { harvested: 0, watered: 0, earned: 0, stolenFromMe: 0 },
     log: [],
@@ -61,7 +63,7 @@ function migrate(raw, now = Date.now()) {
   st.settings = { ...base.settings, ...(raw.settings || {}) };
   st.settings.schedule = { ...base.settings.schedule, ...((raw.settings || {}).schedule || {}) };
   st.inventory = { ...base.inventory, ...(raw.inventory || {}) };
-  for (const k of ['pots', 'decor', 'houseDecor', 'sceneObjects', 'backgrounds', 'items', 'seeds', 'powers']) st.inventory[k] = { ...(st.inventory[k] || {}) };
+  for (const k of ['pots', 'decor', 'houseDecor', 'sceneObjects', 'backgrounds', 'items', 'seeds', 'powers', 'fish']) st.inventory[k] = { ...(st.inventory[k] || {}) };
   st.inventory.powers.cu_huc = 1;
   st.arena = { ...base.arena, ...(raw.arena || {}) };
   if (!st.inventory.powers[st.arena.power]) st.arena.power = 'cu_huc';
@@ -161,6 +163,8 @@ function stepPlant(state, idx, t, fx, offline) {
   const slot = state.slots[idx];
   const p = slot.plant;
   if (!p || p.dead) return null;
+  // Hoa đã nở: giữ nguyên vẻ đẹp tới khi thu hoạch – không úa/tàn, không cần tưới, không mất máu.
+  if (p.bloomed) { p.faded = false; p.water = Math.max(p.water, C.RULES.thirstyAt); return null; }
   const sp = C.SPECIES_BY_ID[p.species];
   const m = mods(slot);
   const schedule = state.settings.schedule;
@@ -199,12 +203,6 @@ function stepPlant(state, idx, t, fx, offline) {
       } else {
         p.waiting = true;
       }
-    }
-  } else if (!p.faded) {
-    p.bloomAge += 1;
-    if (p.bloomAge >= sp.fadeMinutes || (windowed && !S.inWindow(t, sp.window))) {
-      p.faded = true;
-      ev = 'faded';
     }
   }
   return ev;
@@ -327,7 +325,8 @@ function plantSeed(state, idx, speciesId, now = Date.now()) {
     plantedAt: now, theft: [], visitors: [],
   };
   log(state, 'plant', `Gieo ${sp.name} vào ô ${idx + 1}.`);
-  return okr(`Đã gieo ${sp.name}.`);
+  const lv = gainExp(state, C.RULES.plantExp);
+  return okr(`Đã gieo ${sp.name}: +${C.RULES.plantExp} EXP`, { exp: C.RULES.plantExp, levelUp: lv });
 }
 
 function water(state, idx, by = null) {
@@ -335,8 +334,9 @@ function water(state, idx, by = null) {
   const p = slot && slot.plant;
   if (!p) return fail('Ô trống, chưa có cây để tưới.');
   if (p.dead) return fail('Cây đã chết, hãy nhổ đi.');
+  if (p.bloomed) return fail('Hoa đã nở, không cần tưới nữa – thu hoạch thôi!');
   if (p.water > C.RULES.waterBlockAbove) return fail('Đất còn ẩm, chưa cần tưới.');
-  const wasThirsty = p.water < C.RULES.thirstyAt;
+  const dry = p.water < C.RULES.waterExpBelow;
   p.water = 100;
   if (by) {
     p.visitors.unshift({ by, at: Date.now(), type: 'water' });
@@ -345,9 +345,10 @@ function water(state, idx, by = null) {
     return okr('Đã tưới hộ.');
   }
   state.stats.watered += 1;
-  // Chỉ cộng EXP khi cây đang khát: hoa giờ mau khát, tránh tưới liên tục để cày EXP.
-  if (wasThirsty) gainExp(state, C.RULES.waterExp);
-  return okr(wasThirsty ? 'Đã tưới nước.' : 'Đã tưới nước (cây chưa khát nên không có EXP).');
+  // Chỉ cộng EXP khi đất đã khô dưới 50%: tránh tưới liên tục để cày EXP.
+  if (!dry) return okr('Đã tưới nước (đất còn khá ẩm nên không có EXP).');
+  const lv = gainExp(state, C.RULES.waterExp);
+  return okr(`Đã tưới nước: +${C.RULES.waterExp} EXP`, { exp: C.RULES.waterExp, levelUp: lv });
 }
 
 function waterAll(state) {
@@ -422,8 +423,10 @@ function fertilize(state, idx, id = 'phan_bon') {
   const cut = Math.min(it.fert, left);
   state.inventory.items[id] -= 1;
   p.progress = Math.min(1, p.progress + it.fert / sp.bloomMinutes);
+  const exp = Math.max(1, Math.round(it.fert * C.RULES.fertExpPerMin));
+  const lv = gainExp(state, exp);
   log(state, 'fert', `Bón ${it.name} cho ${sp.name} (ô ${idx + 1}): nở sớm hơn ${Math.ceil(cut)} phút.`);
-  return okr(`${it.name}: nở sớm hơn ${Math.ceil(cut)} phút.`);
+  return okr(`${it.name}: nở sớm hơn ${Math.ceil(cut)} phút, +${exp} EXP`, { exp, levelUp: lv });
 }
 
 function removePlant(state, idx) {
@@ -506,6 +509,43 @@ function arenaTransfer(state, prize, gain, opponent) {
     if ((list[prize.id] || 0) > 0) list[prize.id] -= 1;
     log(state, 'arena', `Thua ${opponent} ở Đấu trường, mất ${name}.`);
   }
+}
+
+/**
+ * Rương mốc Thần mộc (cây chung của nhóm, mốc 1–10): mốc càng cao quà càng xịn.
+ * Máy chủ nhóm đã kiểm tra quyền nhận (đủ mốc, có góp sức, chưa nhận); ở đây chỉ trao quà.
+ */
+function treeChest(state, milestone, rng = Math.random) {
+  const m = Math.max(1, Math.min(10, Math.round(Number(milestone) || 1)));
+  const gifts = [];
+  const item = (id, n) => { state.inventory.items[id] = (state.inventory.items[id] || 0) + n; gifts.push(`${n} ${C.ITEMS_BY_ID[id].name}`); };
+  const coin = (n) => { state.money += n; gifts.push(`${n} xu`); };
+  const pickOne = (list) => list[Math.floor(rng() * list.length)];
+  const seed = (minTier, maxTier, n) => {
+    const sp = pickOne(C.SPECIES.filter((s) => s.tier >= minTier && s.tier <= maxTier));
+    state.inventory.seeds[sp.id] = (state.inventory.seeds[sp.id] || 0) + n; gifts.push(`${n} hạt ${sp.name}`);
+  };
+  const pot = (minTier, maxTier) => {
+    const p = pickOne(C.POTS.filter((x) => x.id !== 'nhua' && x.tier >= minTier && x.tier <= maxTier));
+    state.inventory.pots[p.id] = (state.inventory.pots[p.id] || 0) + 1; gifts.push(`1 ${p.name}`);
+  };
+  const power = (wheelOnly, fallback) => {
+    const list = C.POWERS.filter((x) => (wheelOnly ? x.wheel : !x.wheel && x.price) && !state.inventory.powers[x.id]);
+    if (!list.length) { fallback(); return; }
+    const pw = pickOne(list); state.inventory.powers[pw.id] = 1; gifts.push(`chưởng lực ${pw.name}`);
+  };
+  if (m === 1) { item('phan_bon', 2); seed(0, 1, 2); }
+  else if (m === 2) { item('phan_npk', 2); seed(0, 2, 3); }
+  else if (m === 3) { item('phan_sieu_toc', 1); coin(200); }
+  else if (m === 4) { pot(1, 2); item('phan_npk', 2); }
+  else if (m === 5) { item('phan_than_ky', 1); coin(500); }
+  else if (m === 6) { pot(2, 3); item('phan_sieu_toc', 1); }
+  else if (m === 7) power(false, () => coin(1500));
+  else if (m === 8) { item('phan_than_ky', 2); seed(3, 4, 1); }
+  else if (m === 9) { item('tien_duoc', 1); pot(3, 4); }
+  else power(true, () => { item('tien_duoc', 2); coin(3000); });
+  log(state, 'tree', `Rương Thần mộc mốc ${m}: ${gifts.join(', ')}.`);
+  return okr(`🎁 Rương mốc ${m}: ${gifts.join(', ')}`, { gifts });
 }
 
 function equipScene(state, kind, id) {
@@ -955,12 +995,12 @@ function view(state, now = Date.now()) {
     const drain = drainPerMin(sp, mm);
     const v = { ...base, species: sp.id, name: sp.name, stage: stageOf(p), water: Math.round(p.water), health: Math.round(p.health),
       fert: p.fert, waiting: p.waiting, old: p.old, harvests: p.harvests, visitors: p.visitors.slice(0, 3),
-      progress: p.progress, wilting: p.water <= 0, thirsty: p.water < C.RULES.thirstyAt && !p.dead };
+      progress: p.progress, wilting: p.water <= 0 && !p.bloomed, thirsty: p.water < C.RULES.thirstyAt && !p.dead && !p.bloomed };
     v.thirstyInMin = p.water > C.RULES.thirstyAt ? (p.water - C.RULES.thirstyAt) / drain : 0;
     if (!p.bloomed && !p.old && !p.dead) {
       v.bloomInMin = ((1 - p.progress) * sp.bloomMinutes) / growthMult(p, mm);
     }
-    if (p.bloomed && !p.faded) v.fadeInMin = Math.max(0, sp.fadeMinutes - p.bloomAge);
+    if (p.bloomed) v.thirstyInMin = 0;
     if (p.bloomed) v.value = harvestValue(state, slot);
     if (hasWindow(sp, schedule)) v.window = sp.window;
     return v;
@@ -973,7 +1013,7 @@ function view(state, now = Date.now()) {
     nextSlotPrice: state.slots.length < C.RULES.maxSlots ? C.RULES.slotPrice(state.slots.length) : null,
     nextSlotLevel: state.slots.length < C.RULES.maxSlots ? C.RULES.slotLevel(state.slots.length) : null,
     wheel: { pityEpic: state.wheel.pityEpic, pityLeg: state.wheel.pityLeg, spins: state.wheel.spins, free: state.wheel.freeDay !== dayKey(now), history: state.wheel.history.slice(0, 12), pending: state.wheel.pending },
-    arena: state.arena, unlocked: state.unlocked, daily: { available: dailyAvailable(state, now), streak: state.daily.streak },
+    arena: state.arena, minigames: MG.info(state, now), unlocked: state.unlocked, daily: { available: dailyAvailable(state, now), streak: state.daily.streak },
     clock: S.describeNow(now, schedule), now,
   };
 }
@@ -982,5 +1022,5 @@ module.exports = {
   createState, migrate, advance, view, stageOf, decorFx,
   plantSeed, water, waterAll, harvest, fertilize, removePlant, clearTheft,
   buy, equipScene, buySlot, unlock, spinWheel, ackSpin, wheelPool, upgradeHouse, placeHouseDecor, houseLevel, mods, claimDaily, dailyAvailable, dayKey, placePot, placeDecor, setPet, petInfo, gainExp, fastForward, admin, visitSteal, visitWater, harvestValue,
-  remoteGuard, applyRemoteVisit, equipPower, arenaBag, arenaTransfer,
+  remoteGuard, applyRemoteVisit, equipPower, arenaBag, arenaTransfer, treeChest,
 };

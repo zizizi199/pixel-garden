@@ -170,7 +170,8 @@ begin
       from (select * from vp_visits where group_id = p_group and owner_id = uid and not applied order by id limit 50) v),
     'garden', case when p_watch is null then null
       else (select garden - 'bag' from vp_members where group_id = p_group and user_id = p_watch) end,
-    'duels', vp_my_duels(p_group, uid)
+    'duels', vp_my_duels(p_group, uid),
+    'tree', vp_tree_brief(p_group, uid)
   );
 end $$;
 
@@ -228,6 +229,7 @@ begin
   end if;
 
   if p_kind = 'water' then
+    if stage in ('bloom', 'faded') then return jsonb_build_object('ok', false, 'msg', 'Hoa đã nở, không cần tưới nữa.'); end if;
     if exists (select 1 from vp_visits where owner_id = p_owner and slot = p_slot and kind = 'water' and result = 'ok' and not applied) then
       return jsonb_build_object('ok', false, 'msg', 'Vừa có người tưới cây này rồi.');
     end if;
@@ -236,7 +238,7 @@ begin
     update vp_members set garden = g where group_id = p_group and user_id = p_owner;
     insert into vp_visits (group_id, owner_id, by_id, by_name, kind, slot, species, result)
       values (p_group, p_owner, uid, me, 'water', p_slot, sp, 'ok');
-    return jsonb_build_object('ok', true, 'msg', 'Đã tưới hộ.', 'loot', jsonb_build_object('money', 0, 'exp', 2));
+    return jsonb_build_object('ok', true, 'msg', 'Đã tưới hộ: +3 EXP', 'loot', jsonb_build_object('money', 0, 'exp', 3));
   end if;
 
   -- hái trộm: chỉ khi chủ vắng mặt hoặc đã tắt game (không thấy trong 30 giây)
@@ -598,3 +600,136 @@ grant execute on function public.vp_duel_invite(uuid, uuid, text, text), public.
   public.vp_duel_state(uuid), public.vp_duel_answer(uuid, int, text), public.vp_duel_forfeit(uuid),
   public.vp_duel_pick(uuid, int), public.vp_duel_ack(uuid) to authenticated;
 
+
+-- =====================================================================================
+--  THẦN MỘC – cây chung của nhóm. Mỗi người mỗi ngày: tưới 1 lần (+10) và góp phân bón (tối đa +100/ngày,
+--  phân càng xịn càng nhiều). Cây lớn tới mốc nào, ai đã góp sức trong mùa này nhận rương mốc đó.
+--  Lên mốc cuối thì cây "kết trái"; 3 ngày sau tự sang mùa mới (cây nhỏ lại, mốc mới).
+-- =====================================================================================
+
+create table if not exists public.vp_trees (
+  group_id uuid primary key references public.vp_groups (id) on delete cascade,
+  season int not null default 1,
+  growth int not null default 0,
+  completed_at timestamptz,
+  updated_at timestamptz not null default now()
+);
+create table if not exists public.vp_tree_gifts (
+  group_id uuid not null references public.vp_groups (id) on delete cascade,
+  season int not null, user_id uuid not null, day date not null,
+  water int not null default 0, fert int not null default 0,
+  primary key (group_id, season, user_id, day)
+);
+create table if not exists public.vp_tree_claims (
+  group_id uuid not null references public.vp_groups (id) on delete cascade,
+  season int not null, user_id uuid not null, milestone int not null,
+  claimed_at timestamptz not null default now(),
+  primary key (group_id, season, user_id, milestone)
+);
+alter table public.vp_trees enable row level security;
+alter table public.vp_tree_gifts enable row level security;
+alter table public.vp_tree_claims enable row level security;
+revoke all on public.vp_trees, public.vp_tree_gifts, public.vp_tree_claims from anon, authenticated;
+
+create or replace function public.vp_tree_marks() returns int[]
+language sql immutable set search_path = public as $$ select array[100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4000]; $$;
+
+create or replace function public.vp_today() returns date
+language sql stable set search_path = public as $$ select (now() at time zone 'Asia/Ho_Chi_Minh')::date; $$;
+
+-- lấy (tạo nếu chưa có) cây của nhóm; hết 3 ngày sau khi kết trái thì sang mùa mới
+create or replace function public.vp_tree_get(p_group uuid) returns vp_trees
+language plpgsql security definer set search_path = public as $$
+declare t vp_trees;
+begin
+  insert into vp_trees (group_id) values (p_group) on conflict (group_id) do nothing;
+  select * into t from vp_trees where group_id = p_group for update;
+  if t.completed_at is not null and t.completed_at < now() - interval '3 days' then
+    update vp_trees set season = season + 1, growth = 0, completed_at = null, updated_at = now()
+      where group_id = p_group returning * into t;
+    delete from vp_tree_gifts where group_id = p_group and season < t.season - 1;
+    delete from vp_tree_claims where group_id = p_group and season < t.season - 1;
+  end if;
+  return t;
+end $$;
+
+-- tóm tắt cho vp_sync: chấm đỏ khi chưa tưới hôm nay hoặc có rương chưa nhận
+create or replace function public.vp_tree_brief(p_group uuid, uid uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare t vp_trees := vp_tree_get(p_group); marks int[] := vp_tree_marks(); g vp_tree_gifts; helped boolean; open int;
+begin
+  select * into g from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid and day = vp_today();
+  helped := exists (select 1 from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid);
+  select count(*) into open from generate_series(1, array_length(marks, 1)) i
+    where t.growth >= marks[i] and helped
+      and not exists (select 1 from vp_tree_claims c where c.group_id = p_group and c.season = t.season and c.user_id = uid and c.milestone = i);
+  return jsonb_build_object('season', t.season, 'growth', t.growth, 'max', marks[array_length(marks, 1)],
+    'watered', coalesce(g.water, 0) > 0, 'claimable', open);
+end $$;
+
+create or replace function public.vp_tree_state(p_group uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group); t vp_trees := vp_tree_get(p_group); marks int[] := vp_tree_marks(); g vp_tree_gifts; helped boolean;
+begin
+  select * into g from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid and day = vp_today();
+  helped := exists (select 1 from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid);
+  return jsonb_build_object(
+    'season', t.season, 'growth', t.growth, 'marks', to_jsonb(marks), 'completedAt', t.completed_at,
+    'resetAt', case when t.completed_at is null then null else t.completed_at + interval '3 days' end,
+    'today', jsonb_build_object('water', coalesce(g.water, 0), 'fert', coalesce(g.fert, 0), 'fertMax', 100),
+    'helped', helped,
+    'claimed', (select coalesce(jsonb_agg(milestone order by milestone), '[]'::jsonb) from vp_tree_claims
+      where group_id = p_group and season = t.season and user_id = uid),
+    'board', (select coalesce(jsonb_agg(jsonb_build_object('name', m.name, 'total', x.total, 'me', x.user_id = uid) order by x.total desc), '[]'::jsonb)
+      from (select user_id, sum(water + fert) total from vp_tree_gifts where group_id = p_group and season = t.season
+            group by user_id order by 2 desc limit 15) x
+      join vp_members m on m.group_id = p_group and m.user_id = x.user_id)
+  );
+end $$;
+
+-- góp sức: 'water' (+10, 1 lần/ngày) hoặc 'fert' với số phút của loại phân (3, 8, 20, 45, 90), tối đa +100/ngày
+create or replace function public.vp_tree_give(p_group uuid, p_kind text, p_amount int) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group); t vp_trees := vp_tree_get(p_group); g vp_tree_gifts; add int; marks int[] := vp_tree_marks(); maxg int;
+begin
+  maxg := marks[array_length(marks, 1)];
+  if t.growth >= maxg then return jsonb_build_object('ok', false, 'msg', 'Thần mộc đã kết trái! Chờ mùa mới nhé.'); end if;
+  insert into vp_tree_gifts (group_id, season, user_id, day) values (p_group, t.season, uid, vp_today()) on conflict do nothing;
+  select * into g from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid and day = vp_today() for update;
+  if p_kind = 'water' then
+    if g.water > 0 then return jsonb_build_object('ok', false, 'msg', 'Hôm nay bạn đã tưới Thần mộc rồi.'); end if;
+    add := 10;
+    update vp_tree_gifts set water = water + add where group_id = p_group and season = t.season and user_id = uid and day = vp_today();
+  elsif p_kind = 'fert' then
+    if p_amount not in (3, 8, 20, 45, 90) then return jsonb_build_object('ok', false, 'msg', 'Loại phân không hợp lệ.'); end if;
+    if g.fert + p_amount > 100 then return jsonb_build_object('ok', false, 'msg', format('Hôm nay chỉ góp thêm được %s điểm phân nữa.', 100 - g.fert)); end if;
+    add := p_amount;
+    update vp_tree_gifts set fert = fert + add where group_id = p_group and season = t.season and user_id = uid and day = vp_today();
+  else
+    return jsonb_build_object('ok', false, 'msg', 'Hành động không hợp lệ.');
+  end if;
+  update vp_trees set growth = least(maxg, growth + add), updated_at = now(),
+    completed_at = case when growth + add >= maxg then now() else completed_at end
+  where group_id = p_group returning * into t;
+  return jsonb_build_object('ok', true, 'msg', format('Thần mộc lớn thêm %s!', add), 'growth', t.growth);
+end $$;
+
+-- nhận rương mốc i (1..10): cây đã tới mốc, mình đã góp sức trong mùa, chưa nhận
+create or replace function public.vp_tree_claim(p_group uuid, p_milestone int) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group); t vp_trees := vp_tree_get(p_group); marks int[] := vp_tree_marks();
+begin
+  if p_milestone is null or p_milestone < 1 or p_milestone > array_length(marks, 1) or t.growth < marks[p_milestone] then
+    return jsonb_build_object('ok', false, 'msg', 'Cây chưa tới mốc này.');
+  end if;
+  if not exists (select 1 from vp_tree_gifts where group_id = p_group and season = t.season and user_id = uid) then
+    return jsonb_build_object('ok', false, 'msg', 'Hãy góp sức (tưới hoặc bón) cho Thần mộc mùa này để nhận rương.');
+  end if;
+  insert into vp_tree_claims (group_id, season, user_id, milestone) values (p_group, t.season, uid, p_milestone) on conflict do nothing;
+  if not found then return jsonb_build_object('ok', false, 'msg', 'Bạn đã nhận rương này rồi.'); end if;
+  return jsonb_build_object('ok', true, 'milestone', p_milestone, 'season', t.season);
+end $$;
+
+revoke all on function public.vp_tree_marks(), public.vp_today(), public.vp_tree_get(uuid), public.vp_tree_brief(uuid, uuid),
+  public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int) from public, anon;
+grant execute on function public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int) to authenticated;

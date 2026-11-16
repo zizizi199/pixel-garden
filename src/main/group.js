@@ -57,6 +57,7 @@ class GroupRoom {
     this.getArena = getArena || (() => ({ pet: null, power: 'cu_huc' }));
     this.applyArena = applyArena || (async () => {});
     this.duels = []; this.duel = null; this.duelTimer = null; this.duelBusy = false;
+    this.tree = null; // tóm tắt Thần mộc (từ vp_sync)
     this.config = { alias: 'Người chơi', friends: [], group: null, auth: null, ...config };
     this.saveConfig = saveConfig;
     this.getGarden = getGarden;
@@ -87,7 +88,7 @@ class GroupRoom {
     return { mode: 'group', online: this.configured, role: this.inGroup ? 'member' : null, selfId: uid || null,
       groupCode: this.inGroup ? this.config.group.code : '', away: this.away, alias: this.config.alias,
       joined: false, players, friends: this.config.friends, messages: this.messages.slice(-100), error: this.error,
-      duels: this.duels, duel: this.duel };
+      duels: this.duels, duel: this.duel, tree: this.inGroup ? this.tree : null };
   }
 
   emit() { this.changed(this.status()); }
@@ -237,6 +238,33 @@ class GroupRoom {
     }
     await this.syncNow().catch(() => {});
     return out;
+  }
+
+  // ------------------------------------------------------------ Thần mộc (cây chung của nhóm)
+  async treeState() {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    const r = await this.rpc('vp_tree_state', { p_group: this.config.group.id });
+    return { ok: true, tree: {
+      season: Number(r.season) || 1, growth: Number(r.growth) || 0, marks: Array.isArray(r.marks) ? r.marks.map(Number) : [],
+      resetAt: r.resetAt || null, helped: !!r.helped,
+      today: { water: Number(r.today && r.today.water) || 0, fert: Number(r.today && r.today.fert) || 0, fertMax: Number(r.today && r.today.fertMax) || 100 },
+      claimed: Array.isArray(r.claimed) ? r.claimed.map(Number) : [],
+      board: (Array.isArray(r.board) ? r.board : []).slice(0, 15).map((x) => ({ name: cleanName(x.name), total: Number(x.total) || 0, me: !!x.me })),
+    } };
+  }
+
+  async treeGive(kind, amount) {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    const r = await this.rpc('vp_tree_give', { p_group: this.config.group.id, p_kind: kind, p_amount: Number(amount) || 0 });
+    this.syncNow().catch(() => {});
+    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg) };
+  }
+
+  async treeClaim(milestone) {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    const r = await this.rpc('vp_tree_claim', { p_group: this.config.group.id, p_milestone: Number(milestone) });
+    this.syncNow().catch(() => {});
+    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg), milestone: Number(r && r.milestone) };
   }
 
   // ------------------------------------------------------------ đấu trường thú
@@ -397,6 +425,8 @@ class GroupRoom {
       .map((d) => ({ id: d.id, status: String(d.status), a: d.a, b: d.b, aName: cleanName(d.aName), bName: cleanName(d.bName),
         winner: d.winner || null, picked: !!d.picked }));
     this.watchDuels();
+    const t = r && r.tree;
+    this.tree = t ? { season: Number(t.season) || 1, growth: Number(t.growth) || 0, max: Number(t.max) || 1, watered: !!t.watered, claimable: Number(t.claimable) || 0 } : null;
     const events = (Array.isArray(r && r.events) ? r.events : []).filter((e) => e && Number.isSafeInteger(e.id));
     if (events.length) {
       await this.applyEvents(events);
