@@ -9,7 +9,7 @@
     "test": "node --test",
     "icon": "node scripts/make-icon.js",
     "dist": "electron-builder --win portable nsis",
-    "share:win": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-share-zip.ps1"
+    "share:win": "node scripts/build-share-zip.js"
   },
   "keywords": ["electron", "pixel-art", "garden", "idle-game"],
   "license": "UNLICENSED",

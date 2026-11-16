@@ -19,18 +19,23 @@ exit /b %RC%
 :main
 where git || (echo LOI: khong tim thay git trong PATH & exit /b 1)
 rem Thu muc .git do tai khoan/cong cu khac tao -> git bao "dubious ownership".
-rem Chi tin cay thu muc nay cho cac lenh trong file (khong sua cau hinh git chung cua may).
+rem Them DUY NHAT thu muc nay vao danh sach tin cay cua git (dung lenh git goi y).
 set "REPO=%CD:\=/%"
-set "G=git -c safe.directory=%REPO%"
+set "G=git"
+git config --global --get-all safe.directory | findstr /x /c:"%REPO%" >nul || (
+  echo Them %REPO% vao safe.directory cua git
+  git config --global --add safe.directory "%REPO%" || exit /b 1
+)
 for /f "usebackq delims=" %%v in (`powershell -NoProfile -Command "(Get-Content package.json -Raw | ConvertFrom-Json).version"`) do set "VER=%%v"
 if "%VER%"=="" (echo LOI: khong doc duoc version trong package.json & exit /b 1)
 echo Phien ban: v%VER%
 %G% config user.email >nul || %G% config user.email "zizizi199@users.noreply.github.com"
 %G% config user.name >nul || %G% config user.name "zizizi199"
-%G% add .github/workflows/release-windows.yml docs/release-notes.md README.md scripts/publish-release.cmd || exit /b 1
-%G% diff --cached --quiet || %G% commit -m "Tu dong tao GitHub Release khi day tag" || exit /b 1
+%G% add .github/workflows/release-windows.yml docs/release-notes.md README.md package.json scripts/publish-release.cmd scripts/build-share-zip.js || exit /b 1
+%G% diff --cached --quiet || %G% commit -m "Cap nhat dong goi va phat hanh ban Windows" || exit /b 1
 %G% push origin main || (echo LOI: khong day duoc nhanh main & exit /b 1)
-%G% rev-parse -q --verify "refs/tags/v%VER%" >nul || %G% tag "v%VER%" || exit /b 1
-%G% push origin "v%VER%" || (echo LOI: khong day duoc tag v%VER% & exit /b 1)
+rem Gan (lai) tag vao commit moi nhat roi day len -> GitHub Actions dong goi va tao/cap nhat Release.
+%G% tag -f "v%VER%" || exit /b 1
+%G% push -f origin "v%VER%" || (echo LOI: khong day duoc tag v%VER% & exit /b 1)
 %G% ls-remote --tags origin "v%VER%"
 exit /b 0
