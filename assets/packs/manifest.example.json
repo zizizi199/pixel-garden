@@ -1,0 +1,24 @@
+{
+  "name": "Ví dụ – đổi tên thành tên pack",
+  "author": "Tên tác giả",
+  "license": "CC0 1.0",
+  "url": "https://...",
+  "plants": {
+    "hoa_hong": {
+      "sprout": "rose/rose_1.png",
+      "young": "rose/rose_2.png",
+      "bud": "rose/rose_3.png",
+      "bloom": "rose/rose_4.png"
+    },
+    "huong_duong": {
+      "bloom": { "file": "flowers_sheet.png", "x": 48, "y": 0, "w": 16, "h": 32 }
+    }
+  },
+  "pots": {
+    "dat_nung": "pots/pot_terracotta.png",
+    "men_lam": { "file": "pots_sheet.png", "x": 0, "y": 32, "w": 32, "h": 18 }
+  },
+  "decor": {
+    "den_long": "decor/lantern.png"
+  }
+}
