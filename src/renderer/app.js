@@ -582,28 +582,20 @@
     head.querySelector('button').onclick = () => lanAct({ type: 'alias', name: head.querySelector('input').value });
     const note = document.createElement('p'); note.className = 'meta';
     note.textContent = L.online
-      ? 'Chỉ người có mã mời mới vào được phòng. Phòng Internet: chơi được dù khác mạng, dữ liệu mã hoá đầu-cuối qua máy trung chuyển. Phòng LAN: chỉ trong cùng mạng nội bộ.'
-      : 'Chỉ những người có mã mời mới vào được phòng LAN. Không tự tìm máy và không kết nối Internet.';
+      ? 'Chỉ người có mã mời mới vào được phòng. Dữ liệu được mã hoá đầu-cuối qua máy trung chuyển Internet.'
+      : 'Bản này chưa cấu hình máy trung chuyển Internet nên chưa mở phòng chơi chung được.';
     controls.appendChild(note);
     if (L.error) { const e = document.createElement('p'); e.className = 'lan-error'; e.textContent = L.error; controls.appendChild(e); }
 
     if (!L.role) {
-      const start = document.createElement('div'); start.className = 'lan-row';
-      const sel = document.createElement('select');
-      for (const ip of L.addresses || []) { const o = document.createElement('option'); o.value = ip; o.textContent = ip; sel.appendChild(o); }
-      const preferred = (L.addresses || []).find((x) => !x.startsWith('127.'));
-      if (preferred) sel.value = preferred;
-      const host = document.createElement('button'); host.className = 'primary'; host.textContent = 'Mở phòng LAN';
-      host.disabled = !sel.value; host.onclick = () => lanAct({ type: 'host', ip: sel.value });
-      start.append('Địa chỉ máy này:', sel, host); controls.appendChild(start);
-      if (L.online) {
-        const net = document.createElement('div'); net.className = 'lan-row';
-        const hostNet = document.createElement('button'); hostNet.className = 'primary'; hostNet.textContent = '🌐 Mở phòng Internet';
-        hostNet.onclick = () => lanAct({ type: 'hostOnline' });
-        net.append(hostNet, 'Dùng khi mạng công ty chặn LAN.'); controls.insertBefore(net, start);
-      }
+      // Phòng LAN đã ẩn (mạng công ty chặn kết nối giữa các máy) – chỉ dùng phòng Internet.
+      if (!L.online) return;
+      const net = document.createElement('div'); net.className = 'lan-row';
+      const hostNet = document.createElement('button'); hostNet.className = 'primary'; hostNet.textContent = '🌐 Mở phòng';
+      hostNet.onclick = () => lanAct({ type: 'hostOnline' });
+      net.appendChild(hostNet); controls.appendChild(net);
       const join = document.createElement('div'); join.className = 'lan-row';
-      const code = document.createElement('input'); code.placeholder = L.online ? 'Dán mã mời PG2|… (Internet) hoặc PG1|… (LAN)' : 'Dán mã mời PG1|…'; code.className = 'lan-code';
+      const code = document.createElement('input'); code.placeholder = 'Dán mã mời PG2|…'; code.className = 'lan-code';
       const go = document.createElement('button'); go.textContent = 'Vào phòng'; go.onclick = () => lanAct({ type: 'join', code: code.value });
       join.append(code, go); controls.appendChild(join);
       if (L.joined) {
@@ -616,7 +608,7 @@
     } else {
       const room = document.createElement('div'); room.className = 'lan-row';
       const away = document.createElement('span'); away.className = 'lan-presence';
-      away.textContent = `${L.mode === 'online' ? '🌐 Phòng Internet · ' : '🏠 Phòng LAN · '}${L.away ? '💤 Vắng mặt: vườn đang thu gọn' : '🟢 Đang chơi: vườn đang mở'}`;
+      away.textContent = `${L.away ? '💤 Vắng mặt: vườn đang thu gọn' : '🟢 Đang chơi: vườn đang mở'}`;
       const leave = document.createElement('button'); leave.textContent = 'Rời phòng'; leave.onclick = () => lanAct({ type: 'leave' });
       room.append(away, leave); controls.appendChild(room);
       if (L.role === 'host') {

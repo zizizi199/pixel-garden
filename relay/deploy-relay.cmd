@@ -39,12 +39,12 @@ call npx wrangler deploy --no-bundle || goto :fail
 
 echo.
 echo === 4/4 Ghi dia chi vao game ===
-echo Tim dong co dang https://pixel-garden-relay.XXX.workers.dev o tren.
+echo Tim dong co dang https://pixel-garden-relay.TEN-CUA-BAN.workers.dev o tren (phai co ca chu pixel-garden-relay).
 set "URL="
 set /p "URL=Dan dia chi do vao day roi Enter: "
 if not defined URL goto :fail
 set "URL=%URL: =%"
-node -e "const u=process.argv[1].replace(/\/+$/,'');if(!/^https:\/\/[a-z0-9.-]+\.workers\.dev$/i.test(u)){console.error('Dia chi khong dung dang https://....workers.dev');process.exit(1)}const fs=require('fs');const f='../package.json';const p=JSON.parse(fs.readFileSync(f,'utf8'));p.relayUrl=u.replace(/^https:/,'wss:');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n');console.log('Da ghi relayUrl = '+p.relayUrl)" "%URL%" || goto :fail
+node -e "const u=process.argv[1].replace(/\/+$/,'');if(!/^https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/i.test(u)){console.error('Dia chi khong dung dang https://....workers.dev');process.exit(1)}const fs=require('fs');const f='../package.json';const p=JSON.parse(fs.readFileSync(f,'utf8'));p.relayUrl=u.replace(/^https:/,'wss:');fs.writeFileSync(f,JSON.stringify(p,null,2)+'\n');console.log('Da ghi relayUrl = '+p.relayUrl)" "%URL%" || goto :fail
 echo.
 echo XONG. Gio chay scripts\publish-release.cmd de phat hanh ban co "Mo phong Internet".
 echo (Chay thu ngay: npm start trong thu muc game.)

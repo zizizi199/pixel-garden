@@ -407,11 +407,17 @@ app.whenReady().then(async () => {
     if (!win || e.sender !== win.webContents || !a || typeof a !== 'object') return { ok: false, msg: 'Yêu cầu LAN không hợp lệ.' };
     if (lanError) return { ok: false, msg: lanError };
     try {
-      if (a.type === 'host') return await lan.host(a.ip);
+      if (a.type === 'host') return { ok: false, msg: 'Phòng LAN đã tắt, hãy dùng phòng Internet.' };
       if (a.type === 'hostOnline') return await lan.hostOnline();
       if (a.type === 'invite') return await lan.invite();
-      if (a.type === 'join') return await lan.join(a.code);
-      if (a.type === 'reconnect') return await lan.reconnect();
+      if (a.type === 'join') {
+        if (!/^\s*PG2\|/.test(String(a.code || ''))) return { ok: false, msg: 'Chỉ nhận mã mời phòng Internet (bắt đầu bằng PG2|).' };
+        return await lan.join(a.code);
+      }
+      if (a.type === 'reconnect') {
+        if (!lan.config.joined || lan.config.joined.mode !== 'online') return { ok: false, msg: 'Phòng LAN đã tắt. Hãy xin mã mời phòng Internet (PG2|…).' };
+        return await lan.reconnect();
+      }
       if (a.type === 'leave') return await lan.leave();
       if (a.type === 'alias') return await lan.setAlias(a.name);
       if (a.type === 'friend') return await lan.friend(a.id);

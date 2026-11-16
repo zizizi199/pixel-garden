@@ -1,10 +1,10 @@
 {
   "name": "pixel-garden",
   "productName": "Vườn Pixel",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Vườn cây pixel dạng thanh ngang trên desktop Windows – tưới cây theo giờ làm 8h–17h.",
   "main": "src/main/main.js",
-  "relayUrl": "wss://pixel-garden-2605.workers.dev",
+  "relayUrl": "wss://pixel-garden-relay.pixel-garden-2605.workers.dev",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
