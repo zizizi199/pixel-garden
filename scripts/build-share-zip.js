@@ -31,6 +31,25 @@ const runtime = [process.env.ELECTRON_DIST, path.join(dist, 'win-unpacked'), pat
 if (!runtime) throw new Error('Không thấy electron.exe. Chạy npm install trên Windows, hoặc đặt ELECTRON_DIST.');
 step(`Electron runtime: ${runtime}`);
 
+// Trên Windows: dùng tar.exe của hệ thống (bsdtar, ghi được ZIP) bằng đường dẫn đầy đủ,
+// vì máy có Git thường có tar GNU trong PATH – bản đó không ghi ZIP và hiểu "C:\\..." là máy chủ từ xa.
+// Đường dẫn truyền vào đều là tương đối (cwd = thư mục cần nén). Nếu lỗi thì chuyển sang PowerShell.
+function zipOnWindows() {
+  const tar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  const rel = path.relative(out, zip);
+  try {
+    if (!fs.existsSync(tar)) throw new Error(`Không có ${tar}`);
+    execFileSync(tar, ['-a', '-c', '-f', rel, ...fs.readdirSync(out)], { cwd: out, stdio: 'inherit' });
+  } catch (e) {
+    console.warn(`tar.exe lỗi (${e.message}) – dùng PowerShell Compress-Archive.`);
+    fs.rmSync(zip, { force: true });
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `Compress-Archive -Path '${out.replace(/'/g, "''")}\\*' -DestinationPath '${zip.replace(/'/g, "''")}' -CompressionLevel Optimal`],
+    { stdio: 'inherit' });
+  }
+  if (!fs.existsSync(zip)) throw new Error('Không tạo được file ZIP.');
+}
+
 async function main() {
   fs.mkdirSync(dist, { recursive: true });
   for (const p of [stage, out, zip, shaFile]) fs.rmSync(p, { recursive: true, force: true });
@@ -62,7 +81,7 @@ async function main() {
   ].join('\r\n'));
 
   step('Nén ZIP');
-  if (process.platform === 'win32') execFileSync('tar.exe', ['-a', '-c', '-f', zip, '-C', out, '.'], { stdio: 'inherit' });
+  if (process.platform === 'win32') zipOnWindows();
   else execFileSync('zip', ['-qr', zip, '.'], { cwd: out, stdio: 'inherit' });
 
   const hash = crypto.createHash('sha256').update(fs.readFileSync(zip)).digest('hex');
