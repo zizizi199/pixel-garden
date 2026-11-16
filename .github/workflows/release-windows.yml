@@ -1,0 +1,52 @@
+# Tự đóng gói bản Windows và tạo GitHub Release khi đẩy tag dạng v0.2.0
+# (tag phải trùng "version" trong package.json).
+name: Phát hành bản Windows
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Cài thư viện
+        run: npm ci
+
+      - name: Chạy test
+        run: npm test
+
+      - name: Đóng gói ZIP (Choi-Vuon-Pixel.cmd + VuonPixel.exe)
+        run: npm run share:win
+
+      - name: Tạo Release và đính kèm ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $v = (Get-Content package.json -Raw -Encoding UTF8 | ConvertFrom-Json).version
+          if ("v$v" -ne $env:TAG) { throw "Tag $($env:TAG) khác version v$v trong package.json" }
+          $zip = "dist/VuonPixel-$v-Windows.zip"
+          $sha = "dist/VuonPixel-$v-Windows.sha256"
+          if (!(Test-Path $zip)) { throw "Không thấy $zip" }
+          $hash = (Get-Content $sha -Raw).Split(' ')[0].Trim()
+          $notes = (Get-Content docs/release-notes.md -Raw -Encoding UTF8).Replace('{VERSION}', $v) + "`n`nSHA-256 của ZIP: ``$hash``"
+          Set-Content -Path release-notes.tmp.md -Value $notes -Encoding UTF8
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG $zip $sha --clobber
+            gh release edit $env:TAG --notes-file release-notes.tmp.md
+          } else {
+            gh release create $env:TAG $zip $sha --title "Vườn Pixel $v cho Windows" --notes-file release-notes.tmp.md --latest
+          }

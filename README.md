@@ -10,8 +10,11 @@ không lớn và không khát → không lo cây chết khi về nhà.
 
 ## Tải về chơi trên Windows
 
-Tải file `VuonPixel-0.2.0-Windows.zip` trong mục [Releases](https://github.com/zizizi199/pixel-garden/releases), giải nén toàn bộ rồi bấm
-**`Choi-Vuon-Pixel.cmd`**. Giữ các file trong cùng thư mục; không chạy trực tiếp bên trong ZIP.
+1. Mở trang **[bản phát hành mới nhất](https://github.com/zizizi199/pixel-garden/releases/latest)**.
+2. Ở mục **Assets**, tải file **`VuonPixel-<phiên bản>-Windows.zip`** (ví dụ `VuonPixel-0.2.0-Windows.zip`, khoảng 150 MB).
+3. Giải nén toàn bộ rồi bấm **`Choi-Vuon-Pixel.cmd`**. Giữ các file trong cùng thư mục; không chạy trực tiếp bên trong ZIP.
+
+Có thể kiểm tra file tải về bằng mã SHA-256 ghi trong trang phát hành (file `.sha256` đi kèm).
 Admin bị tắt trong bản phát hành. Chế độ LAN mặc định tắt và chỉ mở khi bạn chủ động tạo phòng.
 
 Bạn được tải và chơi bản phát hành. Mã nguồn được công khai để xem; hiện chưa cấp quyền sử dụng lại,
@@ -33,6 +36,12 @@ npm start
 ```bash
 npm run share:win
 ```
+
+### Phát hành bản mới lên GitHub
+
+Bản Windows được GitHub Actions tự đóng gói (`.github/workflows/release-windows.yml`): tăng `version` trong `package.json`,
+rồi chạy `scripts\publish-release.cmd` (hoặc tự `git tag v<version>` và `git push origin v<version>`).
+Khoảng 5–10 phút sau, trang Releases sẽ có file ZIP và file `.sha256`.
 
 Lệnh tạo portable EXE và bộ cài NSIS qua electron-builder:
 
