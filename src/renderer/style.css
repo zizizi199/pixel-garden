@@ -579,3 +579,25 @@ button.arena-card.back:hover { transform: translateY(-6px) rotate(-3deg); }
   animation: shout 1.4s ease-out forwards; pointer-events: none;
 }
 @keyframes shout { from { transform: translateX(-50%) scale(.3); opacity: 0; } 20% { transform: translateX(-50%) scale(1.2); opacity: 1; } 80% { opacity: 1; } to { transform: translateX(-50%) scale(1); opacity: 0; } }
+
+/* Đấu trường hiện đè lên vườn của mình, thanh cao lên (không cuộn) */
+body.mode-arena { --bar-h: 330px; }
+body.mode-arena #toast { bottom: 8px; left: 240px; transform: none; }
+body.mode-arena.pos-top #toast { top: 8px; bottom: auto; }
+#arena-view {
+  position: absolute; inset: 0; z-index: 8; padding: 8px 40px 8px 10px; overflow: hidden;
+  background: var(--paper); border-left: 2px solid var(--wood-d); border-right: 2px solid var(--wood-d);
+}
+#arena-view .arena {
+  height: 100%; display: grid; grid-template-columns: minmax(300px, 1fr) minmax(380px, 1.15fr);
+  grid-auto-rows: min-content; align-content: center; gap: 8px 16px;
+}
+#arena-view .arena > * { grid-column: 2; }
+#arena-view .arena > .arena-stage { grid-column: 1; grid-row: 1 / span 9; align-self: stretch; min-height: 0; }
+#arena-view .arena-stage .arena-pet canvas { width: 96px; }
+#arena-view .arena-cards .arena-card { height: 104px; }
+#arena-view .arena-min { position: absolute; top: 4px; right: 6px; z-index: 9; padding: 0 8px; font-size: 14px; }
+#arena-back {
+  position: absolute; top: 3px; left: 50%; transform: translateX(-50%); z-index: 7; font-weight: 700;
+  border: 2px solid #b5179e; animation: duel-pulse 1.2s ease-in-out infinite;
+}

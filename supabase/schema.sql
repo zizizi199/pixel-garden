@@ -280,8 +280,8 @@ grant execute on function public.vp_create_group(text, text), public.vp_join_gro
 
 -- =====================================================================================
 --  ĐẤU TRƯỜNG THÚ: 2 thành viên có pet, chỉ đấu khi được mời và đồng ý.
---  3 vòng điền chữ còn thiếu của 1 từ tiếng Anh (vòng 1: 5 chữ, vòng 2: 6, vòng 3: 7). Hoà → hiệp phụ, từ ngắn dần
---  (6, 5, 4, 3 chữ…) tới khi có người thắng. Ai trả lời đúng trước được 1 điểm (pet tung chưởng lực).
+--  3 vòng điền chữ còn thiếu của 1 từ tiếng Anh (vòng 1: 3 chữ, vòng 2: 4, vòng 3: 5). Hoà → hiệp phụ, từ ngắn dần
+--  (4, 3, 3… chữ) tới khi có người thắng. Ai trả lời đúng trước được 1 điểm (pet tung chưởng lực).
 --  Từ lấy ONLINE từ từ điển Datamuse (api.datamuse.com, miễn phí, không cần khoá) qua extension http của Supabase:
 --  lấy ~300 từ thông dụng nhất theo độ dài, lưu đệm 7 ngày trong vp_words rồi chọn ngẫu nhiên.
 --  Người thắng lật 1 trong 3 lá bài để lấy 1 món (hạt giống hoặc chậu) trong kho của người thua.
@@ -353,7 +353,7 @@ begin
   if res.status <> 200 then return 0; end if;
   insert into vp_words (word, source, fetched_at)
   select word, 'datamuse', now() from (
-    select w ->> 'word' as word,
+    select distinct on (w ->> 'word') w ->> 'word' as word,
       coalesce((select substring(t from 3)::numeric from jsonb_array_elements_text(coalesce(w -> 'tags', '[]'::jsonb)) t
         where t like 'f:%' limit 1), 0) as freq
     from jsonb_array_elements(res.content::jsonb) w
@@ -368,10 +368,10 @@ exception when others then
   return 0;
 end $$;
 
--- độ dài từ: vòng 1–3 = 5, 6, 7 chữ; hiệp phụ ngắn dần 6, 5, 4, 3 chữ (tối thiểu 3)
+-- độ dài từ: vòng 1–3 = 3, 4, 5 chữ; hiệp phụ ngắn dần 4, 3 chữ (tối thiểu 3)
 create or replace function public.vp_duel_word_len(n int) returns int
 language sql immutable set search_path = public as $$
-  select case when n <= 3 then 4 + n else greatest(3, 7 - (n - 3)) end;
+  select case when n <= 3 then 2 + n else greatest(3, 5 - (n - 3)) end;
 $$;
 
 -- bắt đầu vòng n: chọn ngẫu nhiên 1 từ (chưa dùng trong trận), che ~40% chữ cái

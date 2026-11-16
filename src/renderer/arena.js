@@ -123,7 +123,7 @@
       } else {
         const form = document.createElement('form'); form.className = 'arena-answer';
         const input = document.createElement('input');
-        input.maxLength = 12; input.placeholder = 'Gõ cả từ, vd APPLE'; input.autocomplete = 'off'; input.spellcheck = false;
+        input.maxLength = 12; input.placeholder = 'Gõ cả từ'; input.autocomplete = 'off'; input.spellcheck = false;
         input.value = draft; input.disabled = d.tries >= 3;
         input.oninput = () => { draft = input.value; };
         const send = document.createElement('button'); send.type = 'submit'; send.className = 'primary'; send.textContent = 'Trả lời';

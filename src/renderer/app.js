@@ -20,6 +20,7 @@
   const SP = {}; const POT = {}; const DEC = {}; const PET = {}; const POWERS = {}; const ITEM = {};
   let fertKind = 'phan_bon'; // loại phân công cụ 🌱 đang dùng
   let arenaOpened = null; // id trận đã tự mở đấu trường
+  let arenaShown = false; // đấu trường đang hiện đè lên vườn (thanh cao lên)
 
   const STAGE_VI = { seed: 'Hạt', sprout: 'Mầm', young: 'Cây non', bud: 'Nụ', bloom: 'Đang nở', faded: 'Đã tàn', dead: 'Đã chết', empty: 'Trống' };
   const TOOLS = [
@@ -95,7 +96,8 @@
   // ------------------------------------------------------------ bố cục
   function setMode(m) {
     mode = m;
-    document.body.classList.remove('mode-collapsed', 'mode-bar', 'mode-panel');
+    document.body.classList.remove('mode-collapsed', 'mode-bar', 'mode-panel', 'mode-arena');
+    if (m !== 'arena') { arenaShown = false; const av = $('#arena-view'); if (av) av.remove(); }
     document.body.classList.add(`mode-${m}`);
     $('#tab').classList.toggle('hidden', m !== 'collapsed');
     $('#app').classList.toggle('hidden', m === 'collapsed');
@@ -696,15 +698,44 @@
         bn.dataset.id = d.id; bn.innerHTML = '';
         const t = document.createElement('span'); t.textContent = `⚔ ${d.aName} thách đấu thú với bạn!`;
         const yes = document.createElement('button'); yes.className = 'primary'; yes.textContent = 'Nhận lời';
-        yes.onclick = async () => { bn.remove(); const r = await lanAct({ type: 'duelRespond', id: d.id, accept: true }); if (r.ok) openPanel('arena'); };
+        yes.onclick = async () => { bn.remove(); const r = await lanAct({ type: 'duelRespond', id: d.id, accept: true }); if (r.ok) showArena(); };
         const no = document.createElement('button'); no.textContent = 'Từ chối';
         no.onclick = () => { bn.remove(); lanAct({ type: 'duelRespond', id: d.id, accept: false }); };
         bn.append(t, yes, no);
       }
     } else if (bn) bn.remove();
     const d = L.duel;
-    if (d && d.id !== arenaOpened && d.status !== 'loading') { arenaOpened = d.id; if (panel !== 'arena') openPanel('arena'); }
-    if (panel === 'arena') { if (!d) closePanel(); else renderPanel(); }
+    if (d && d.id !== arenaOpened && d.status !== 'loading') { arenaOpened = d.id; showArena(); }
+    if (arenaShown) { if (!d) hideArena(); else renderArena(); }
+    let back = $('#arena-back');
+    if (d && !arenaShown && mode === 'bar') { // đã thu đấu trường lại: nút quay lại trên vườn
+      if (!back) { back = document.createElement('button'); back.id = 'arena-back'; back.textContent = '⚔ Đấu trường'; back.onclick = showArena; $('#garden').appendChild(back); }
+    } else if (back) back.remove();
+  }
+
+  /** Đấu trường hiện đè lên phần vườn của mình; thanh vườn cao lên để thấy hết, không phải cuộn. */
+  function showArena() {
+    if (!L || !L.duel) return;
+    panel = null; $('#panel').classList.add('hidden');
+    arenaShown = true;
+    if (mode !== 'arena') api.setLayout('arena');
+    setTimeout(renderArena, 0);
+  }
+  function hideArena() {
+    arenaShown = false;
+    const av = $('#arena-view'); if (av) av.remove();
+    if (mode === 'arena') api.setLayout('bar');
+  }
+  function renderArena() {
+    if (!arenaShown || !L || !L.duel) return;
+    if (window.Arena && Arena.busy()) return; // đang chiếu chưởng lực
+    let av = $('#arena-view');
+    if (!av) { av = document.createElement('div'); av.id = 'arena-view'; $('#garden').appendChild(av); }
+    const focus = !!(document.activeElement && document.activeElement.closest('#arena-view .arena-answer'));
+    av.innerHTML = '';
+    const close = document.createElement('button'); close.className = 'arena-min'; close.title = 'Thu nhỏ đấu trường (trận vẫn tiếp tục)'; close.textContent = '▾';
+    close.onclick = hideArena; av.appendChild(close);
+    Arena.render(av, { L, CAT, PET, SP, POT, POWERS, Sprites, Sound, esc, toast, needConfirm, petPic, canvasOf, lanAct, focus });
   }
 
   function renderGroupControls(controls) {
@@ -723,7 +754,7 @@
     if (L.duel) {
       const back = document.createElement('div'); back.className = 'lan-row';
       const go = document.createElement('button'); go.className = 'primary'; go.textContent = '⚔ Quay lại đấu trường';
-      go.onclick = () => openPanel('arena'); back.appendChild(go); controls.appendChild(back);
+      go.onclick = showArena; back.appendChild(go); controls.appendChild(back);
     }
     const row = document.createElement('div'); row.className = 'lan-row';
     const away = document.createElement('span'); away.className = 'lan-presence';
@@ -820,7 +851,7 @@
           const duel = document.createElement('button'); duel.textContent = '⚔ Thách đấu';
           duel.title = 'Mời đấu thú: 3 vòng điền chữ tiếng Anh, thắng được lật bài lấy 1 món của đối thủ. Cả hai cần có pet.';
           duel.disabled = !V.pet || p.status === 'Ngoại tuyến';
-          duel.onclick = async () => { const r = await lanAct({ type: 'duelInvite', target: p.id }); if (r.ok) openPanel('arena'); };
+          duel.onclick = async () => { const r = await lanAct({ type: 'duelInvite', target: p.id }); if (r.ok) showArena(); };
           row.appendChild(duel);
         }
         if (L.role === 'host' && p.id !== 'host') {
@@ -872,14 +903,13 @@
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
     bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', arena: '⚔ Đấu trường thú', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
 
   function renderPanel() {
     if (!panel) return;
     // đang quay: không vẽ lại bảng (nếu vẽ lại, bánh xe mới sẽ đứng yên thay cho bánh xe đang quay)
     if (panel === 'wheel' && spinning && $('#panel-body .wheel-wrap')) return;
-    if (panel === 'arena' && window.Arena && Arena.busy()) return; // đang chiếu chưởng lực
-    const arenaFocus = panel === 'arena' && document.activeElement && !!document.activeElement.closest('.arena-answer');
+
     if (panel === 'lan' && document.activeElement && document.activeElement.closest('#panel-body')
       && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     const tabs = $('#panel-tabs');
@@ -901,8 +931,7 @@
     const ch = body.querySelector('.lan-chat-history');
     chatScroll = ch ? { top: ch.scrollTop, atBottom: ch.scrollHeight - ch.scrollTop - ch.clientHeight < 12 } : null;
     body.innerHTML = '';
-    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan,
-      arena: (b) => Arena.render(b, { L, CAT, PET, SP, POT, POWERS, Sprites, Sound, esc, toast, needConfirm, petPic, canvasOf, lanAct, focus: arenaFocus }) }[panel])(body);
+    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan }[panel])(body);
     body.scrollTop = scroll;
   }
 
@@ -1610,6 +1639,7 @@
     document.body.classList.toggle('pos-bottom', position !== 'top');
     setMode(m);
     if (m === 'panel' && panel) { $('#panel').classList.remove('hidden'); renderPanel(); }
+    if (m === 'arena') { arenaShown = true; renderArena(); syncArena(); } else syncArena();
   });
 
   $('#collapse').onclick = () => { panel = null; api.setLayout('collapsed'); };
@@ -1633,7 +1663,7 @@
   });
   $('#music-btn').onclick = () => act({ type: 'settings', patch: { music: !V.settings.music } });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { if (panel) closePanel(); else api.setLayout('collapsed'); }
+    if (e.key === 'Escape') { if (panel) closePanel(); else if (arenaShown) hideArena(); else api.setLayout('collapsed'); }
     const n = Number(e.key);
     if (!e.target.closest('input') && n >= 1 && n <= TOOLS.length) { tool = TOOLS[n - 1].id; renderHud(); }
   });

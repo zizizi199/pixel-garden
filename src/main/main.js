@@ -21,6 +21,7 @@ const { verifyAdmin, KEY_FILE_NAME } = require('./admin-gate');
 const ROOT = path.join(__dirname, '..', '..');
 const BAR_H = 178;
 const PANEL_H = 300;
+const ARENA_H = 330; // Đấu trường thú: thanh vườn cao lên, trận đấu hiện đè lên vườn
 const TAB_W = 310;
 const TAB_H = 34;
 const COMPACT_W = 980;
@@ -59,7 +60,7 @@ function boundsFor(m) {
   }
   const width = state.settings.barWidth === 'compact' ? Math.min(COMPACT_W, wa.width) : wa.width;
   const x = wa.x + wa.width - width;
-  const height = m === 'panel' ? BAR_H + PANEL_H : BAR_H;
+  const height = m === 'panel' ? BAR_H + PANEL_H : m === 'arena' ? ARENA_H : BAR_H;
   return { x, y: top ? wa.y : wa.y + wa.height - height, width, height };
 }
 
@@ -448,7 +449,7 @@ app.whenReady().then(async () => {
     updateTray();
     return r;
   });
-  ipcMain.on('layout', (_e, m) => { if (['collapsed', 'bar', 'panel'].includes(m)) applyLayout(m); });
+  ipcMain.on('layout', (_e, m) => { if (['collapsed', 'bar', 'panel', 'arena'].includes(m)) applyLayout(m); });
   ipcMain.handle('rescanPacks', () => scanPacks());
   ipcMain.handle('lan', async (e, a) => {
     if (!win || e.sender !== win.webContents || !a || typeof a !== 'object') return { ok: false, msg: 'Yêu cầu LAN không hợp lệ.' };
