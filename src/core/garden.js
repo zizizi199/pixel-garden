@@ -22,11 +22,12 @@ function createState(now = Date.now()) {
     slots: Array.from({ length: C.RULES.startSlots }, () => ({ pot: 'nhua', plant: null, decor: [null, null, null, null] })),
     house: { level: 1, decor: { roof: null, window: null, side: null, front: null } },
     scene: { object: null, background: null },
-    inventory: { pots: {}, decor: {}, houseDecor: {}, sceneObjects: {}, backgrounds: {}, items: { phan_bon: 1 }, seeds: { ...C.RULES.starterSeeds } },
+    inventory: { pots: {}, decor: {}, houseDecor: {}, sceneObjects: {}, backgrounds: {}, items: { phan_bon: 3 }, powers: { cu_huc: 1 }, seeds: { ...C.RULES.starterSeeds } },
     unlocked: { species: C.SPECIES.filter((x) => !x.unlock && !x.wheel).map((x) => x.id), pots: ['nhua'], decor: [], pets: [], sceneObjects: [], backgrounds: [] },
     wheel: { spins: 0, pityEpic: 0, pityLeg: 0, freeDay: null, history: [], pending: null },
     daily: { last: null, streak: 0 },
     pets: { owned: [], active: null, status: {} }, // status[id] = { sleepUntil, blocks }
+    arena: { power: 'cu_huc', wins: 0, losses: 0 }, // Đấu trường thú (nhóm Supabase)
     unlocks: {},
     stats: { harvested: 0, watered: 0, earned: 0, stolenFromMe: 0 },
     log: [],
@@ -60,7 +61,10 @@ function migrate(raw, now = Date.now()) {
   st.settings = { ...base.settings, ...(raw.settings || {}) };
   st.settings.schedule = { ...base.settings.schedule, ...((raw.settings || {}).schedule || {}) };
   st.inventory = { ...base.inventory, ...(raw.inventory || {}) };
-  for (const k of ['pots', 'decor', 'houseDecor', 'sceneObjects', 'backgrounds', 'items', 'seeds']) st.inventory[k] = { ...(st.inventory[k] || {}) };
+  for (const k of ['pots', 'decor', 'houseDecor', 'sceneObjects', 'backgrounds', 'items', 'seeds', 'powers']) st.inventory[k] = { ...(st.inventory[k] || {}) };
+  st.inventory.powers.cu_huc = 1;
+  st.arena = { ...base.arena, ...(raw.arena || {}) };
+  if (!st.inventory.powers[st.arena.power]) st.arena.power = 'cu_huc';
   st.scene = { ...base.scene, ...(raw.scene || {}) };
   if (!D.SCENE_OBJECTS_BY_ID[st.scene.object] || !st.inventory.sceneObjects[st.scene.object]) st.scene.object = null;
   if (!D.BACKGROUNDS_BY_ID[st.scene.background] || !st.inventory.backgrounds[st.scene.background]) st.scene.background = null;
@@ -138,9 +142,7 @@ function drainPerMin(species, m) {
 }
 
 function growthMult(plant, m) {
-  let k = 1 + (m.growth || 0);
-  if (plant.fert > 0) k *= C.RULES.fertMult;
-  return k;
+  return 1 + (m.growth || 0);
 }
 
 function hasWindow(species, schedule) {
@@ -183,7 +185,6 @@ function stepPlant(state, idx, t, fx, offline) {
   let g = growthMult(p, m);
   if (p.water <= 0) g = 0;
   else if (p.water < C.RULES.thirstyAt) g *= 0.5;
-  if (p.fert > 0) p.fert = Math.max(0, p.fert - 1);
 
   const windowed = hasWindow(sp, schedule);
   if (!p.bloomed) {
@@ -407,15 +408,22 @@ function harvest(state, idx) {
   return okr(`+${v.money} xu, +${v.exp} EXP`, { ...v, levelUp: lv });
 }
 
-function fertilize(state, idx) {
+function fertilize(state, idx, id = 'phan_bon') {
+  const it = C.ITEMS_BY_ID[id];
+  if (!it || !it.fert) return fail('Loại phân bón không hợp lệ.');
   const slot = getSlot(state, idx);
   const p = slot && slot.plant;
   if (!p || p.dead) return fail('Không có cây để bón.');
   if (p.bloomed || p.old) return fail('Chỉ bón cho cây đang lớn.');
-  if ((state.inventory.items.phan_bon || 0) <= 0) return fail('Hết phân bón, mua thêm trong cửa hàng.');
-  state.inventory.items.phan_bon -= 1;
-  p.fert = C.RULES.fertMinutes;
-  return okr(`Đã bón phân: lớn nhanh x${C.RULES.fertMult} trong ${C.RULES.fertMinutes} phút.`);
+  if (p.progress >= 1) return fail('Cây đã ra nụ, chờ tới giờ nở – không cần bón nữa.');
+  if ((state.inventory.items[id] || 0) <= 0) return fail(`Hết ${it.name}, mua thêm trong cửa hàng.`);
+  const sp = C.SPECIES_BY_ID[p.species];
+  const left = (1 - p.progress) * sp.bloomMinutes;
+  const cut = Math.min(it.fert, left);
+  state.inventory.items[id] -= 1;
+  p.progress = Math.min(1, p.progress + it.fert / sp.bloomMinutes);
+  log(state, 'fert', `Bón ${it.name} cho ${sp.name} (ô ${idx + 1}): nở sớm hơn ${Math.ceil(cut)} phút.`);
+  return okr(`${it.name}: nở sớm hơn ${Math.ceil(cut)} phút.`);
 }
 
 function removePlant(state, idx) {
@@ -436,17 +444,19 @@ function clearTheft(state, idx) {
 }
 
 function buy(state, kind, id, qty = 1) {
-  const list = { pot: C.POTS_BY_ID, decor: D.POT_DECOR_BY_ID, hdecor: D.HOUSE_DECOR_BY_ID, scene: D.SCENE_OBJECTS_BY_ID, background: D.BACKGROUNDS_BY_ID, item: C.ITEMS_BY_ID, pet: C.PETS_BY_ID, seed: C.SPECIES_BY_ID }[kind];
+  const list = { pot: C.POTS_BY_ID, decor: D.POT_DECOR_BY_ID, hdecor: D.HOUSE_DECOR_BY_ID, scene: D.SCENE_OBJECTS_BY_ID, background: D.BACKGROUNDS_BY_ID, item: C.ITEMS_BY_ID, pet: C.PETS_BY_ID, seed: C.SPECIES_BY_ID, power: C.POWERS_BY_ID }[kind];
   const it = list && list[id];
   if (!it) return fail('Không có món này.');
   if (kind === 'seed') return buySeeds(state, id, qty);
-  if (kind !== 'pet' && kind !== 'hdecor' && state.level < it.level) return fail(`Cần cấp ${it.level}.`); // pet: chỉ cần đủ tiền
+  if (kind !== 'pet' && kind !== 'hdecor' && kind !== 'power' && state.level < it.level) return fail(`Cần cấp ${it.level}.`); // pet: chỉ cần đủ tiền
   if (kind === 'pot' && !state.unlocked.pots.includes(id)) return fail(`Cần mở khoá ${it.name} trước.`);
   if (it.once && state.unlocks[id]) return fail('Bạn đã có món này.');
   if (kind === 'pet' && state.pets.owned.includes(id)) return fail(`Bạn đã có ${it.name}.`);
   if (kind === 'scene' && state.inventory.sceneObjects[id]) return fail(`Bạn đã có ${it.name}.`);
   if (kind === 'background' && state.inventory.backgrounds[id]) return fail(`Bạn đã có ${it.name}.`);
-  if (it.wheel && (kind === 'scene' || kind === 'background')) return fail(`${it.name} chỉ có từ Vòng quay may mắn.`);
+  if (it.wheel && (kind === 'scene' || kind === 'background' || kind === 'item' || kind === 'power')) return fail(`${it.name} chỉ có từ Vòng quay may mắn.`);
+  if (kind === 'power' && state.inventory.powers[id]) return fail(`Bạn đã có ${it.name}.`);
+  if (kind === 'power' && !it.price) return fail(`${it.name} không bán.`);
   if (it.wheel && kind === 'decor' && !state.unlocked.decor.includes(id)) return fail(`${it.name} chỉ có khi quay trúng ở Vòng quay may mắn.`);
   if (it.wheel && kind === 'pet' && !state.unlocked.pets.includes(id)) return fail(`${it.name} chỉ có khi quay trúng ở Vòng quay may mắn.`);
   if (state.money < it.price) return fail(`Không đủ xu (cần ${it.price}).`);
@@ -461,12 +471,41 @@ function buy(state, kind, id, qty = 1) {
     state.pets.status[id] = { sleepUntil: 0, blocks: 0 };
     if (!state.pets.active) state.pets.active = id; // pet đầu tiên tự ra vườn
   }
+  if (kind === 'power') state.inventory.powers[id] = 1;
   if (kind === 'item') {
     if (it.once) state.unlocks[id] = true;
     else state.inventory.items[id] = (state.inventory.items[id] || 0) + 1;
   }
   log(state, 'buy', `Mua ${it.name} (-${it.price} xu).`);
   return okr(`Đã mua ${it.name}.`);
+}
+
+function equipPower(state, id) {
+  if (!C.POWERS_BY_ID[id] || !state.inventory.powers[id]) return fail('Bạn chưa có chưởng lực này.');
+  state.arena.power = id;
+  return okr(`Pet sẽ dùng ${C.POWERS_BY_ID[id].name} ở Đấu trường.`);
+}
+
+/** Phần thưởng đấu trường: kho đồ có thể bị lấy (hạt giống, chậu chưa đặt) và nhận/mất 1 món. */
+function arenaBag(state) {
+  const seeds = Object.entries(state.inventory.seeds).filter(([id, n]) => n > 0 && C.SPECIES_BY_ID[id]).map(([id, n]) => ({ kind: 'seed', id, n }));
+  const pots = Object.entries(state.inventory.pots).filter(([id, n]) => n > 0 && C.POTS_BY_ID[id]).map(([id, n]) => ({ kind: 'pot', id, n }));
+  return [...seeds, ...pots].slice(0, 60);
+}
+
+function arenaTransfer(state, prize, gain, opponent) {
+  const list = prize && (prize.kind === 'seed' ? state.inventory.seeds : prize.kind === 'pot' ? state.inventory.pots : null);
+  const it = prize && (prize.kind === 'seed' ? C.SPECIES_BY_ID[prize.id] : C.POTS_BY_ID[prize.id]);
+  if (gain) { state.arena.wins += 1; } else { state.arena.losses += 1; }
+  if (!list || !it) { log(state, 'arena', gain ? `Thắng ${opponent} ở Đấu trường!` : `Thua ${opponent} ở Đấu trường.`); return; }
+  const name = prize.kind === 'seed' ? `1 hạt ${it.name}` : `1 ${it.name}`;
+  if (gain) {
+    list[prize.id] = (list[prize.id] || 0) + 1; // chỉ nhận món, không mở khoá mua thêm
+    log(state, 'arena', `Thắng ${opponent} ở Đấu trường, lấy được ${name}!`);
+  } else {
+    if ((list[prize.id] || 0) > 0) list[prize.id] -= 1;
+    log(state, 'arena', `Thua ${opponent} ở Đấu trường, mất ${name}.`);
+  }
 }
 
 function equipScene(state, kind, id) {
@@ -566,6 +605,8 @@ function wheelPool() {
   D.SCENE_OBJECTS.filter((x) => x.wheel).forEach((x) => pool[x.tier].push({ kind: 'scene', id: x.id, name: x.name, tier: x.tier }));
   D.BACKGROUNDS.filter((x) => x.wheel).forEach((x) => pool[x.tier].push({ kind: 'background', id: x.id, name: x.name, tier: x.tier }));
   C.PETS.filter((x) => x.wheel).forEach((x) => pool[x.tier].push({ kind: 'pet', id: x.id, name: x.name, tier: x.tier }));
+  C.POWERS.filter((x) => x.wheel).forEach((x) => pool[x.tier].push({ kind: 'power', id: x.id, name: x.name, tier: x.tier }));
+  C.ITEMS.filter((x) => x.wheel && x.fert).forEach((x) => pool[x.tier].push({ kind: 'fert', id: x.id, name: x.name, tier: x.tier }));
   return pool;
 }
 
@@ -575,6 +616,8 @@ function wheelOwned(state, it) {
   if (it.kind === 'decor') return state.unlocked.decor.includes(it.id);
   if (it.kind === 'scene') return !!state.inventory.sceneObjects[it.id];
   if (it.kind === 'background') return !!state.inventory.backgrounds[it.id];
+  if (it.kind === 'power') return !!state.inventory.powers[it.id];
+  if (it.kind === 'fert') return false; // tiêu hao: trúng lúc nào cũng nhận
   return state.unlocked.pets.includes(it.id) || state.pets.owned.includes(it.id);
 }
 
@@ -600,7 +643,7 @@ function spinOnce(state, rng) {
   if (!items.length || (tier === 0 && rng() >= W.commonItemChance)) { // quà an ủi
     const r = rng();
     if (r < 0.45) { const n = 60 + Math.floor(rng() * 10) * 10; state.money += n; return { tier, kind: 'coin', name: `${n} xu`, qty: n }; }
-    if (r < 0.7) { state.inventory.items.phan_bon = (state.inventory.items.phan_bon || 0) + 2; return { tier, kind: 'item', id: 'phan_bon', name: '2 phân bón', qty: 2 }; }
+    if (r < 0.7) { state.inventory.items.phan_npk = (state.inventory.items.phan_npk || 0) + 2; return { tier, kind: 'item', id: 'phan_npk', name: '2 Phân NPK', qty: 2 }; }
     const sps = state.unlocked.species.map((id) => C.SPECIES_BY_ID[id]);
     const sp = pickWeighted(sps, (x) => 1 / x.seed, rng);
     state.inventory.seeds[sp.id] = (state.inventory.seeds[sp.id] || 0) + 3;
@@ -639,6 +682,12 @@ function spinOnce(state, rng) {
       state.scene[isObject ? 'object' : 'background'] = it.id;
       res.bonus = 'đã đặt vào vườn';
     }
+  } else if (it.kind === 'power') {
+    if (dup) { const n = 50 * (it.tier + 1); state.money += n; res.bonus = `${n} xu (trùng)`; }
+    else { state.inventory.powers[it.id] = 1; res.bonus = 'chưởng lực mới'; }
+  } else if (it.kind === 'fert') {
+    state.inventory.items[it.id] = (state.inventory.items[it.id] || 0) + 2;
+    res.bonus = '2 lọ';
   } else if (dup) { // pet trùng → đổi ra xu
     const n = Math.round(C.PETS_BY_ID[it.id].price * 0.1);
     state.money += n;
@@ -924,7 +973,7 @@ function view(state, now = Date.now()) {
     nextSlotPrice: state.slots.length < C.RULES.maxSlots ? C.RULES.slotPrice(state.slots.length) : null,
     nextSlotLevel: state.slots.length < C.RULES.maxSlots ? C.RULES.slotLevel(state.slots.length) : null,
     wheel: { pityEpic: state.wheel.pityEpic, pityLeg: state.wheel.pityLeg, spins: state.wheel.spins, free: state.wheel.freeDay !== dayKey(now), history: state.wheel.history.slice(0, 12), pending: state.wheel.pending },
-    unlocked: state.unlocked, daily: { available: dailyAvailable(state, now), streak: state.daily.streak },
+    arena: state.arena, unlocked: state.unlocked, daily: { available: dailyAvailable(state, now), streak: state.daily.streak },
     clock: S.describeNow(now, schedule), now,
   };
 }
@@ -933,5 +982,5 @@ module.exports = {
   createState, migrate, advance, view, stageOf, decorFx,
   plantSeed, water, waterAll, harvest, fertilize, removePlant, clearTheft,
   buy, equipScene, buySlot, unlock, spinWheel, ackSpin, wheelPool, upgradeHouse, placeHouseDecor, houseLevel, mods, claimDaily, dailyAvailable, dayKey, placePot, placeDecor, setPet, petInfo, gainExp, fastForward, admin, visitSteal, visitWater, harvestValue,
-  remoteGuard, applyRemoteVisit,
+  remoteGuard, applyRemoteVisit, equipPower, arenaBag, arenaTransfer,
 };

@@ -53,7 +53,10 @@ function validSupabase(cfg) {
 }
 
 class GroupRoom {
-  constructor({ config, saveConfig, getGarden, applyEvents, applyReward, changed, supabase, fetch, now }) {
+  constructor({ config, saveConfig, getGarden, applyEvents, applyReward, changed, supabase, fetch, now, getArena, applyArena }) {
+    this.getArena = getArena || (() => ({ pet: null, power: 'cu_huc' }));
+    this.applyArena = applyArena || (async () => {});
+    this.duels = []; this.duel = null; this.duelTimer = null; this.duelBusy = false;
     this.config = { alias: 'Người chơi', friends: [], group: null, auth: null, ...config };
     this.saveConfig = saveConfig;
     this.getGarden = getGarden;
@@ -83,7 +86,8 @@ class GroupRoom {
       garden: m.id === this.watchId ? this.watched : null }));
     return { mode: 'group', online: this.configured, role: this.inGroup ? 'member' : null, selfId: uid || null,
       groupCode: this.inGroup ? this.config.group.code : '', away: this.away, alias: this.config.alias,
-      joined: false, players, friends: this.config.friends, messages: this.messages.slice(-100), error: this.error };
+      joined: false, players, friends: this.config.friends, messages: this.messages.slice(-100), error: this.error,
+      duels: this.duels, duel: this.duel };
   }
 
   emit() { this.changed(this.status()); }
@@ -235,6 +239,107 @@ class GroupRoom {
     return out;
   }
 
+  // ------------------------------------------------------------ đấu trường thú
+  async duelInvite(target) {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    if (!UUID.test(String(target))) throw new Error('Người chơi không hợp lệ.');
+    const me = this.getArena();
+    if (!me.pet) throw new Error('Bạn cần có pet đang ra vườn để vào đấu trường.');
+    const id = await this.rpc('vp_duel_invite', { p_group: this.config.group.id, p_opponent: target, p_pet: me.pet, p_power: me.power });
+    await this.openDuel(id);
+    await this.syncNow().catch(() => {});
+    return { ok: true, msg: 'Đã gửi lời thách đấu, chờ đối thủ đồng ý…' };
+  }
+
+  async duelRespond(id, accept) {
+    const me = this.getArena();
+    if (accept && !me.pet) throw new Error('Bạn cần có pet đang ra vườn để vào đấu trường.');
+    await this.rpc('vp_duel_respond', { p_duel: id, p_accept: !!accept, p_pet: me.pet, p_power: me.power });
+    if (accept) await this.openDuel(id); else if (this.duel && this.duel.id === id) this.duel = null;
+    await this.syncNow().catch(() => {});
+    return { ok: true, msg: accept ? 'Vào đấu trường!' : 'Đã từ chối lời thách đấu.' };
+  }
+
+  async duelAnswer(guess) {
+    const d = this.duel;
+    if (!d || d.status !== 'playing') throw new Error('Không có trận đang diễn ra.');
+    const r = await this.rpc('vp_duel_answer', { p_duel: d.id, p_round: d.round, p_guess: String(guess || '').slice(0, 40) });
+    await this.refreshDuel();
+    return { ok: !!(r && r.ok), correct: !!(r && r.correct), msg: cleanText(r && r.msg) };
+  }
+
+  async duelPick(idx) {
+    const d = this.duel;
+    if (!d) throw new Error('Không có trận đấu.');
+    await this.rpc('vp_duel_pick', { p_duel: d.id, p_idx: Number(idx) });
+    await this.refreshDuel();
+    return { ok: true };
+  }
+
+  async duelForfeit() {
+    const d = this.duel;
+    if (!d) return { ok: true };
+    await this.rpc('vp_duel_forfeit', { p_duel: d.id });
+    await this.refreshDuel();
+    return { ok: true, msg: d.status === 'invited' ? 'Đã huỷ lời mời.' : 'Bạn đã bỏ cuộc.' };
+  }
+
+  closeDuel() {
+    const d = this.duel;
+    const meId = d && d[d.me] && d[d.me].id;
+    const waitingPick = d && d.status === 'finished' && d.winner && d.winner !== meId && d.pick === null; // chờ người thắng lật bài
+    if (d && (d.status === 'playing' || (d.status === 'finished' && !d.applied && !waitingPick))) return { ok: false, msg: 'Trận đấu chưa xong.' };
+    this.duel = null; clearTimeout(this.duelTimer); this.duelTimer = null;
+    this.emit();
+    return { ok: true };
+  }
+
+  async openDuel(id) {
+    if (!UUID.test(String(id))) return;
+    this.duel = { id, status: 'loading' };
+    await this.refreshDuel();
+    this.duelLoop();
+  }
+
+  // trận đang diễn ra / vừa kết thúc chưa nhận thưởng → tự mở đấu trường
+  watchDuels() {
+    const active = this.duels.find((d) => d.status === 'playing' || (d.status === 'finished' && (!d.winner || d.picked || d.winner === this.config.auth.uid)));
+    if (active && (!this.duel || this.duel.id !== active.id) && !this.duelBusy) this.openDuel(active.id).catch(() => {});
+  }
+
+  duelLoop() {
+    clearTimeout(this.duelTimer);
+    this.duelTimer = setTimeout(async () => {
+      if (!this.duel) return;
+      try { await this.refreshDuel(); } catch (_) { /* thử lại */ }
+      const s = this.duel && this.duel.status;
+      if (s === 'playing' || s === 'invited' || s === 'loading' || (s === 'finished' && !this.duel.applied)) this.duelLoop();
+    }, 1000);
+  }
+
+  async refreshDuel() {
+    const cur = this.duel;
+    if (!cur) return;
+    this.duelBusy = true;
+    try {
+      const r = await this.rpc('vp_duel_state', { p_duel: cur.id });
+      if (!this.duel || this.duel.id !== cur.id || !r) return;
+      const side = (x) => ({ id: x && x.id, name: cleanName(x && x.name), pet: x && x.pet, power: (x && x.power) || 'cu_huc', score: Number(x && x.score) || 0 });
+      this.duel = { id: r.id, status: r.status, me: r.me === 'a' ? 'a' : 'b', a: side(r.a), b: side(r.b), round: Number(r.round) || 0,
+        pattern: typeof r.pattern === 'string' ? r.pattern.slice(0, 12) : '', left: Number(r.left) || 0, roundOver: !!r.roundOver,
+        roundWinner: r.roundWinner || null, word: typeof r.word === 'string' ? r.word.slice(0, 12) : null, tries: Number(r.tries) || 0,
+        history: Array.isArray(r.history) ? r.history.slice(-30) : [], winner: r.winner || null,
+        cards: r.cards, pick: Number.isInteger(r.pick) ? r.pick : null, prize: r.prize || null, applied: !!r.applied };
+      const d = this.duel;
+      if (d.status === 'finished' && !d.applied && (!d.winner || d.pick !== null)) {
+        const meId = d[d.me].id; const opp = d.me === 'a' ? d.b : d.a;
+        await this.applyArena({ gain: d.winner === meId, lose: !!d.winner && d.winner !== meId, prize: d.prize, opponent: opp.name });
+        await this.rpc('vp_duel_ack', { p_duel: d.id });
+        d.applied = true;
+      }
+    } finally { this.duelBusy = false; this.emit(); }
+  }
+
   // ------------------------------------------------------------ đồng bộ định kỳ
   start() {
     if (!this.configured || !this.inGroup) return;
@@ -288,6 +393,10 @@ class GroupRoom {
     }
     this.messages = this.messages.slice(-100);
     if (this.watchId) this.watched = safeGarden(r && r.garden);
+    this.duels = (Array.isArray(r && r.duels) ? r.duels : []).filter((d) => d && UUID.test(d.id)).slice(0, 10)
+      .map((d) => ({ id: d.id, status: String(d.status), a: d.a, b: d.b, aName: cleanName(d.aName), bName: cleanName(d.bName),
+        winner: d.winner || null, picked: !!d.picked }));
+    this.watchDuels();
     const events = (Array.isArray(r && r.events) ? r.events : []).filter((e) => e && Number.isSafeInteger(e.id));
     if (events.length) {
       await this.applyEvents(events);

@@ -17,7 +17,9 @@
   let lanInvite = '';
   let confirmTap = null; // {key, until}
   const GARDEN_SCALE = 2.5; // số px màn hình cho 1 pixel sprite trong vườn
-  const SP = {}; const POT = {}; const DEC = {}; const PET = {};
+  const SP = {}; const POT = {}; const DEC = {}; const PET = {}; const POWERS = {}; const ITEM = {};
+  let fertKind = 'phan_bon'; // loại phân công cụ 🌱 đang dùng
+  let arenaOpened = null; // id trận đã tự mở đấu trường
 
   const STAGE_VI = { seed: 'Hạt', sprout: 'Mầm', young: 'Cây non', bud: 'Nụ', bloom: 'Đang nở', faded: 'Đã tàn', dead: 'Đã chết', empty: 'Trống' };
   const TOOLS = [
@@ -142,8 +144,18 @@
       Sprites.paint(ic, Sprites.icon(t.icon));
       b.appendChild(ic);
       if (t.id === tool) b.classList.add('on');
-      if (t.id === 'fert') { const n = document.createElement('span'); n.className = 'n'; n.textContent = V.inventory.items.phan_bon || 0; b.appendChild(n); }
-      b.onclick = () => { tool = t.id; renderHud(); };
+      if (t.id === 'fert') {
+        const n = document.createElement('span'); n.className = 'n'; n.textContent = V.inventory.items[fertKind] || 0; b.appendChild(n);
+        b.title = `Phân bón: ${ITEM[fertKind] ? ITEM[fertKind].name : ''} (−${ITEM[fertKind] ? ITEM[fertKind].fert : 0} phút/lần). Bấm lại để đổi loại.`;
+      }
+      b.onclick = () => {
+        if (t.id === 'fert' && tool === 'fert') { // đổi sang loại phân khác đang có
+          const kinds = CAT.items.filter((x) => x.fert && (V.inventory.items[x.id] || 0) > 0).map((x) => x.id);
+          if (kinds.length) { fertKind = kinds[(kinds.indexOf(fertKind) + 1) % kinds.length]; toast(`Đang dùng ${ITEM[fertKind].name} (còn ${V.inventory.items[fertKind]}): −${ITEM[fertKind].fert} phút/lần`); }
+          else toast('Hết phân bón – mua ở Cửa hàng › Vật phẩm.', true);
+        }
+        tool = t.id; renderHud();
+      };
       tools.appendChild(b);
     }
     if (V.unlocks.binh_lon) {
@@ -329,7 +341,7 @@
     if (t === 'clear') act({ type: 'clearTheft', slot: i });
     if (t === 'water') act({ type: 'water', slot: i }, elx);
     if (t === 'harvest') act({ type: 'harvest', slot: i }, elx);
-    if (t === 'fert') act({ type: 'fertilize', slot: i });
+    if (t === 'fert') act({ type: 'fertilize', slot: i, item: fertKind });
     if (t === 'shovel' && !needConfirm(`rm${i}`, `Bấm lần nữa để nhổ ${s.name}`)) act({ type: 'remove', slot: i });
     if (panel === 'detail') { panelArg = i; renderPanel(); }
     renderSlots();
@@ -489,6 +501,12 @@
     if (r.kind === 'scene') return canvasOf(SceneSprites.object(r.id), 'small');
     if (r.kind === 'background') return scenePic('background', r.id);
     if (r.kind === 'pet') return petPic(PET[r.id]);
+    if (r.kind === 'power' || r.kind === 'fert') {
+      const d = document.createElement('div'); d.className = 'power-pic';
+      const pw = POWERS[r.id]; if (pw) d.style.setProperty('--c', pw.color);
+      d.textContent = r.kind === 'fert' ? '🧪' : ({ leaf: '🍃', water: '💧', petal: '🌸', fire: '🔥', ice: '❄', bolt: '⚡', wind: '🌪', dragon: '🐉', rainbow: '🌈', galaxy: '🌌' }[pw && pw.fx] || '💥');
+      return d;
+    }
     return document.createElement('span');
   }
 
@@ -498,6 +516,8 @@
     if (it.kind === 'decor') return V.unlocked.decor.includes(it.id);
     if (it.kind === 'scene') return !!V.inventory.sceneObjects[it.id];
     if (it.kind === 'background') return !!V.inventory.backgrounds[it.id];
+    if (it.kind === 'power') return !!V.inventory.powers[it.id];
+    if (it.kind === 'fert') return false;
     return V.unlocked.pets.includes(it.id) || V.pets.owned.includes(it.id);
   }
 
@@ -630,10 +650,10 @@
     body.appendChild(ul);
   }
 
-  async function lanAct(a) {
+  async function lanAct(a, quiet) {
     const r = await api.lan(a);
     if (r.code) lanInvite = r.code;
-    if (r.msg) toast(r.msg, !r.ok);
+    if (r.msg && !(quiet && r.ok)) toast(r.msg, !r.ok);
     if (!r.ok) Sound.play('error');
     if (panel === 'lan') renderPanel();
     return r;
@@ -663,6 +683,30 @@
     h.scrollTop = atBottom ? h.scrollHeight : top;
   }
 
+  /** Lời thách đấu gửi tới mình: hiện ngay trên thanh vườn; trận đang đấu: tự mở đấu trường. */
+  function syncArena() {
+    if (!L || L.mode !== 'group') return;
+    const me = L.selfId;
+    const incoming = (L.duels || []).filter((d) => d.status === 'invited' && d.b === me);
+    let bn = $('#duel-invite');
+    if (incoming.length) {
+      const d = incoming[0];
+      if (!bn) { bn = document.createElement('div'); bn.id = 'duel-invite'; $('#garden').appendChild(bn); Sound.play('bloom'); }
+      if (bn.dataset.id !== d.id) {
+        bn.dataset.id = d.id; bn.innerHTML = '';
+        const t = document.createElement('span'); t.textContent = `⚔ ${d.aName} thách đấu thú với bạn!`;
+        const yes = document.createElement('button'); yes.className = 'primary'; yes.textContent = 'Nhận lời';
+        yes.onclick = async () => { bn.remove(); const r = await lanAct({ type: 'duelRespond', id: d.id, accept: true }); if (r.ok) openPanel('arena'); };
+        const no = document.createElement('button'); no.textContent = 'Từ chối';
+        no.onclick = () => { bn.remove(); lanAct({ type: 'duelRespond', id: d.id, accept: false }); };
+        bn.append(t, yes, no);
+      }
+    } else if (bn) bn.remove();
+    const d = L.duel;
+    if (d && d.id !== arenaOpened && d.status !== 'loading') { arenaOpened = d.id; if (panel !== 'arena') openPanel('arena'); }
+    if (panel === 'arena') { if (!d) closePanel(); else renderPanel(); }
+  }
+
   function renderGroupControls(controls) {
     if (!L.online) return;
     if (!L.role) {
@@ -675,6 +719,11 @@
       const go = document.createElement('button'); go.textContent = 'Vào nhóm'; go.onclick = () => lanAct({ type: 'joinGroup', code: code.value });
       join.append(code, go); controls.appendChild(join);
       return;
+    }
+    if (L.duel) {
+      const back = document.createElement('div'); back.className = 'lan-row';
+      const go = document.createElement('button'); go.className = 'primary'; go.textContent = '⚔ Quay lại đấu trường';
+      go.onclick = () => openPanel('arena'); back.appendChild(go); controls.appendChild(back);
     }
     const row = document.createElement('div'); row.className = 'lan-row';
     const away = document.createElement('span'); away.className = 'lan-presence';
@@ -767,6 +816,13 @@
           closePanel(); renderAll();
         };
         row.append(label, friend, visit);
+        if (L.mode === 'group' && L.role) {
+          const duel = document.createElement('button'); duel.textContent = '⚔ Thách đấu';
+          duel.title = 'Mời đấu thú: 3 vòng điền chữ tiếng Anh, thắng được lật bài lấy 1 món của đối thủ. Cả hai cần có pet.';
+          duel.disabled = !V.pet || p.status === 'Ngoại tuyến';
+          duel.onclick = async () => { const r = await lanAct({ type: 'duelInvite', target: p.id }); if (r.ok) openPanel('arena'); };
+          row.appendChild(duel);
+        }
         if (L.role === 'host' && p.id !== 'host') {
           const revoke = document.createElement('button'); revoke.textContent = 'Chặn';
           revoke.title = 'Thu hồi mã mời; người này không thể vào lại phòng.';
@@ -813,15 +869,17 @@
 
   // ------------------------------------------------------------ panel
   const PANEL_TABS = {
-    shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['items', 'Vật phẩm']],
-    bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn']],
+    shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
+    bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', arena: '⚔ Đấu trường thú', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
 
   function renderPanel() {
     if (!panel) return;
     // đang quay: không vẽ lại bảng (nếu vẽ lại, bánh xe mới sẽ đứng yên thay cho bánh xe đang quay)
     if (panel === 'wheel' && spinning && $('#panel-body .wheel-wrap')) return;
+    if (panel === 'arena' && window.Arena && Arena.busy()) return; // đang chiếu chưởng lực
+    const arenaFocus = panel === 'arena' && document.activeElement && !!document.activeElement.closest('.arena-answer');
     if (panel === 'lan' && document.activeElement && document.activeElement.closest('#panel-body')
       && ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
     const tabs = $('#panel-tabs');
@@ -843,7 +901,8 @@
     const ch = body.querySelector('.lan-chat-history');
     chatScroll = ch ? { top: ch.scrollTop, atBottom: ch.scrollHeight - ch.scrollTop - ch.clientHeight < 12 } : null;
     body.innerHTML = '';
-    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan }[panel])(body);
+    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan,
+      arena: (b) => Arena.render(b, { L, CAT, PET, SP, POT, POWERS, Sprites, Sound, esc, toast, needConfirm, petPic, canvasOf, lanAct, focus: arenaFocus }) }[panel])(body);
     body.scrollTop = scroll;
   }
 
@@ -947,6 +1006,7 @@
   }
 
   function renderShop(body) {
+    if (sub === 'powers') { renderPowers(body, true); return; }
     const g = grid(body);
     if (sub === 'scene') { g.remove(); renderSceneCatalog(body, true); return; }
     if (sub === 'seeds') {
@@ -1081,9 +1141,10 @@
       for (const it of CAT.items) {
         const owned = it.once ? (V.unlocks[it.id] ? 'Đã có' : '') : `Đang có: ${V.inventory.items[it.id] || 0}`;
         g.appendChild(card({
-          title: it.name, locked: V.level < it.level,
-          lines: [it.desc, `<span class="price">${it.price} xu</span> · ${owned}`, lockTxt(it.level)],
-          buttons: [{ label: 'Mua', primary: true, disabled: V.level < it.level || V.money < it.price || (it.once && V.unlocks[it.id]), onClick: () => act({ type: 'buy', kind: 'item', id: it.id }) }],
+          title: it.name, locked: !it.wheel && V.level < it.level, tier: it.fert ? it.tier : null,
+          lines: [it.desc, it.wheel ? `🎡 Chỉ có từ Vòng quay · ${owned}` : `<span class="price">${it.price} xu</span> · ${owned}`, it.wheel ? '' : lockTxt(it.level)],
+          buttons: it.wheel ? [{ label: '🎡 Tới vòng quay', onClick: () => openPanel('wheel') }]
+            : [{ label: 'Mua', primary: true, disabled: V.level < it.level || V.money < it.price || (it.once && V.unlocks[it.id]), onClick: () => act({ type: 'buy', kind: 'item', id: it.id }) }],
         }));
       }
       if (V.nextSlotPrice != null) {
@@ -1095,8 +1156,29 @@
     }
   }
 
+  /** Chưởng lực: mua ở Cửa hàng (mua 1 lần dùng mãi), chọn dùng ở Kho đồ; một số chỉ có từ Vòng quay. */
+  function renderPowers(body, shopping) {
+    const note = document.createElement('div'); note.className = 'note';
+    note.textContent = 'Chưởng lực là chiêu pet tung ra ở ⚔ Đấu trường thú mỗi khi bạn trả lời đúng trước đối thủ. Mua 1 lần dùng mãi; chưởng có 🎡 phải quay trúng ở Vòng quay.';
+    body.appendChild(note);
+    const g = grid(body);
+    for (const pw of CAT.powers) {
+      const owned = !!V.inventory.powers[pw.id];
+      const using = V.arena && V.arena.power === pw.id;
+      if (!shopping && !owned) continue;
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.style.setProperty('--c', pw.color);
+      pic.textContent = { bump: '💥', leaf: '🍃', water: '💧', petal: '🌸', fire: '🔥', ice: '❄', bolt: '⚡', wind: '🌪', dragon: '🐉', rainbow: '🌈', galaxy: '🌌' }[pw.fx] || '💥';
+      const buttons = owned
+        ? [{ label: using ? '✔ Đang dùng' : 'Dùng', primary: !using, disabled: using, onClick: () => act({ type: 'equipPower', id: pw.id }) }]
+        : pw.wheel ? [{ label: '🎡 Tới vòng quay', onClick: () => openPanel('wheel') }]
+          : [{ label: 'Mua', primary: true, disabled: V.money < pw.price, onClick: () => act({ type: 'buy', kind: 'power', id: pw.id }) }];
+      g.appendChild(card({ pic, title: pw.name, tier: pw.tier, lines: [pw.desc, owned ? 'Đã có' : pw.wheel ? '🎡 Chỉ có từ Vòng quay' : `<span class="price">${pw.price} xu</span>`], buttons }));
+    }
+  }
+
   function renderBag(body) {
     if (sub === 'scene') { renderSceneCatalog(body, false); return; }
+    if (sub === 'powers') { renderPowers(body, false); return; }
     if (sub === 'seeds') {
       const ts = targetSlot();
       const list = CAT.species.filter((x) => (V.inventory.seeds[x.id] || 0) > 0);
@@ -1358,7 +1440,10 @@
     const add = (label, a, primary, dis) => { const b = document.createElement('button'); b.textContent = label; b.disabled = !!dis; if (primary) b.className = 'primary'; b.onclick = () => act(a); acts.appendChild(b); };
     add('💧 Tưới', { type: 'water', slot: s.i }, false, s.stage === 'dead' || s.water > CAT.rules.waterBlockAbove);
     add('✂ Thu hoạch', { type: 'harvest', slot: s.i }, true, !(s.stage === 'bloom' || s.stage === 'faded'));
-    add(`🌱 Bón phân (${V.inventory.items.phan_bon || 0})`, { type: 'fertilize', slot: s.i }, false, s.stage === 'dead' || s.stage === 'bloom' || s.stage === 'faded' || s.old);
+    const canFert = !(s.stage === 'dead' || s.stage === 'bloom' || s.stage === 'faded' || s.old || (s.progress || 0) >= 1);
+    for (const it of CAT.items.filter((x) => x.fert && (V.inventory.items[x.id] || 0) > 0)) {
+      add(`🌱 ${it.name} −${it.fert}p (${V.inventory.items[it.id]})`, { type: 'fertilize', slot: s.i, item: it.id }, false, !canFert);
+    }
     if (s.theftMark) add('🧹 Dọn dấu vết', { type: 'clearTheft', slot: s.i });
     const dcb = document.createElement('button'); dcb.textContent = '🎀 Trang trí chậu';
     dcb.onclick = () => { selected = s.i; openPanel('bag', null, 'decor'); };
@@ -1498,6 +1583,8 @@
   CAT.potDecor.forEach((x) => { DEC[x.id] = x; });
   const HDEC = {}; CAT.houseDecor.forEach((x) => { HDEC[x.id] = x; }); window.__HDEC = HDEC;
   CAT.pets.forEach((x) => { PET[x.id] = x; });
+  (CAT.powers || []).forEach((x) => { POWERS[x.id] = x; });
+  CAT.items.forEach((x) => { ITEM[x.id] = x; });
   Sprites.setPetCatalog(CAT.pets);
   Sprites.setPacks(PACKS, V.settings.usePacks, () => renderAll());
   Sprites.paint($('#tab-icon'), Sprites.plant(SP.van_tho, 'bloom'));
@@ -1515,6 +1602,7 @@
   api.onLanState((v) => {
     L = v;
     if (panel === 'lan') { renderPanel(); refreshChatOnly(); }
+    syncArena();
     if (visiting) { if (!L.role) visiting = null; renderVisitBanner(); renderSlots(); renderHouse(); renderScene(); }
   });
   api.onLayout(({ mode: m, position }) => {

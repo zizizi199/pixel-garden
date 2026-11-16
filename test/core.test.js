@@ -406,3 +406,45 @@ test('save mã hoá: sửa file thì bị làm mới; bản mới bỏ chỉ s�
     fs.rmSync(fs.realpathSync(dir), { recursive: true, force: true });
   }
 });
+
+test('phân bón: bón nhiều lần cộng dồn, phân đắt rút nhiều phút hơn, Tiên dược chỉ có từ vòng quay', () => {
+  const st = G.createState();
+  st.money = 5000; st.level = 20;
+  G.plantSeed(st, 0, 'van_tho');
+  const p = st.slots[0].plant;
+  const bloom = C.SPECIES_BY_ID.van_tho.bloomMinutes;
+  st.inventory.items.phan_bon = 2;
+  assert.ok(G.fertilize(st, 0, 'phan_bon').ok);
+  const after1 = p.progress;
+  assert.ok(Math.abs(after1 - 3 / bloom) < 1e-9, 'lần 1 rút 3 phút');
+  assert.ok(G.fertilize(st, 0, 'phan_bon').ok);
+  assert.ok(Math.abs(p.progress - 6 / bloom) < 1e-9, 'lần 2 vẫn rút thêm 3 phút');
+  assert.equal(G.fertilize(st, 0, 'phan_bon').ok, false, 'hết phân');
+  assert.ok(G.buy(st, 'item', 'phan_npk').ok);
+  assert.ok(G.fertilize(st, 0, 'phan_npk').ok);
+  assert.equal(p.progress, 1, 'không vượt quá lúc ra nụ');
+  assert.equal(G.fertilize(st, 0, 'phan_npk').ok, false, 'đã ra nụ thì không bón');
+  assert.equal(G.buy(st, 'item', 'tien_duoc').ok, false);
+  assert.ok(C.ITEMS_BY_ID.phan_than_ky.fert > C.ITEMS_BY_ID.phan_sieu_toc.fert && C.ITEMS_BY_ID.phan_sieu_toc.price > C.ITEMS_BY_ID.phan_npk.price);
+});
+
+test('chưởng lực: mua, chọn dùng; chưởng vòng quay không mua được; đấu trường chuyển 1 món', () => {
+  const st = G.createState();
+  st.money = 10000;
+  assert.equal(st.arena.power, 'cu_huc');
+  assert.ok(G.buy(st, 'power', 'phi_diep').ok);
+  assert.equal(G.buy(st, 'power', 'phi_diep').ok, false, 'đã có');
+  assert.equal(G.buy(st, 'power', 'ngan_ha').ok, false, 'chỉ từ vòng quay');
+  assert.ok(G.equipPower(st, 'phi_diep').ok);
+  assert.equal(G.equipPower(st, 'ngan_ha').ok, false);
+  assert.ok(G.wheelPool().flat().some((x) => x.kind === 'power') && G.wheelPool().flat().some((x) => x.kind === 'fert'));
+  const bag = G.arenaBag(st);
+  assert.ok(bag.some((x) => x.kind === 'seed' && x.id === 'muoi_gio'));
+  const n = st.inventory.seeds.muoi_gio;
+  G.arenaTransfer(st, { kind: 'seed', id: 'muoi_gio' }, false, 'Bạn');
+  assert.equal(st.inventory.seeds.muoi_gio, n - 1);
+  G.arenaTransfer(st, { kind: 'pot', id: 'vang' }, true, 'Bạn');
+  assert.equal(st.inventory.pots.vang, 1);
+  assert.deepEqual([st.arena.wins, st.arena.losses], [1, 1]);
+  assert.equal(C.RULES.wheel.cost, 200);
+});

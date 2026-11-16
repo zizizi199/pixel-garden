@@ -292,8 +292,16 @@ const DECOR = [
   { id: 'dai_phun', name: 'Đài phun nước mini', price: 850, level: 7, desc: 'Cây khát chậm hơn 10%, +5% EXP.', fx: { water: 0.1, exp: 0.05 } },
 ];
 
+/**
+ * Phân bón: mỗi lần bón rút ngắn ngay `fert` phút thời gian nở của 1 cây đang lớn; bón nhiều lần được
+ * (cộng dồn tới khi cây ra nụ). Phân càng đắt rút càng nhiều. wheel = chỉ có từ Vòng quay.
+ */
 const ITEMS = [
-  { id: 'phan_bon', name: 'Phân bón', price: 30, level: 1, desc: 'Bón 1 cây đang lớn: lớn nhanh gấp đôi trong 20 phút.' },
+  { id: 'phan_bon', name: 'Phân bón thường', tier: 0, fert: 3, price: 20, level: 1, desc: 'Rút ngắn 3 phút thời gian nở.' },
+  { id: 'phan_npk', name: 'Phân NPK', tier: 1, fert: 8, price: 45, level: 3, desc: 'Rút ngắn 8 phút thời gian nở.' },
+  { id: 'phan_sieu_toc', name: 'Phân siêu tốc', tier: 2, fert: 20, price: 110, level: 6, desc: 'Rút ngắn 20 phút thời gian nở.' },
+  { id: 'phan_than_ky', name: 'Phân thần kỳ', tier: 3, fert: 45, price: 240, level: 10, desc: 'Rút ngắn 45 phút thời gian nở.' },
+  { id: 'tien_duoc', name: 'Tiên dược', tier: 4, fert: 90, price: 0, level: 1, wheel: true, desc: 'Chỉ có từ Vòng quay: rút ngắn 90 phút – gần như nở ngay.' },
   { id: 'binh_lon', name: 'Bình tưới lớn', price: 500, level: 5, once: true, desc: 'Mở khoá nút "Tưới tất cả".' },
 ];
 
@@ -316,7 +324,7 @@ const RULES = {
    * Trúng vật phẩm = mở khoá để MUA (không mất phí mở khoá) + tặng kèm 1 cái (pet thì chỉ mở khoá).
    * pityEpic: 10 lượt chưa ra Rare trở lên → lượt thứ 10 chắc chắn Rare+; pityLegendary: 60 lượt → chắc Legendary+.
    */
-  wheel: { cost: 300, cost10: 2700, freePerDay: 1, rates: [55, 30, 12.5, 2, 0.45, 0.045, 0.005], pityEpic: 10, pityLegendary: 60, newItemChance: 0.75, commonItemChance: 0.35 },
+  wheel: { cost: 200, cost10: 1800, freePerDay: 1, rates: [55, 30, 12.5, 2, 0.45, 0.045, 0.005], pityEpic: 10, pityLegendary: 60, newItemChance: 0.75, commonItemChance: 0.35 },
   daily: { pet: 0.01, pot: 0.27, seedQty: [[1, 0.6], [2, 0.3], [3, 0.1]] },
   decorSlots: 4,
   thirstyAt: 25, // % nước: dưới mức này cây "khát" → lớn chậm 50%
@@ -324,8 +332,6 @@ const RULES = {
   dryHealthLossPerMin: 1 / 3, // khi cạn nước: mất 1 máu mỗi 3 phút làm việc (~5 giờ là chết)
   offlineGapMs: 10 * 60 * 1000, // app không chạy quá 10 phút → coi là vắng mặt
   offlineMinHealth: 30,
-  fertMinutes: 20, // phân bón: lớn nhanh x2 trong 20 phút (hoa nở 5–90 phút)
-  fertMult: 2,
   fadedValue: 0.4,
   stealShare: 0.5,
   petSleepMs: 30 * 60 * 1000, // pet chặn trộm xong ngủ 30 phút (thời gian thực)
@@ -337,9 +343,27 @@ function expToNext(level) {
   return Math.round(60 * Math.pow(level, 1.5));
 }
 
+/**
+ * Chưởng lực của pet ở Đấu trường thú: hiện ra khi chủ trả lời đúng trước đối thủ (hiệu ứng, không đổi luật).
+ * Mua 1 lần dùng mãi; wheel = chỉ có từ Vòng quay. fx = kiểu hiệu ứng vẽ trên giao diện.
+ */
+const POWERS = [
+  { id: 'cu_huc', name: 'Cú húc đầu', tier: 0, price: 0, fx: 'bump', color: '#c9c9c9', desc: 'Chưởng mặc định của mọi pet.' },
+  { id: 'phi_diep', name: 'Phi diệp chưởng', tier: 0, price: 150, fx: 'leaf', color: '#52b788', desc: 'Lá cây xoáy tít bay về phía đối thủ.' },
+  { id: 'thuy_cau', name: 'Thuỷ cầu chưởng', tier: 1, price: 400, fx: 'water', color: '#4cc9f0', desc: 'Quả cầu nước to tướng.' },
+  { id: 'hoa_vu', name: 'Hoa vũ phi tiêu', tier: 1, price: 0, wheel: true, fx: 'petal', color: '#ff8fab', desc: 'Mưa cánh hoa sắc lẻm.' },
+  { id: 'hoa_diem', name: 'Hoả diệm chưởng', tier: 2, price: 900, fx: 'fire', color: '#ff6b35', desc: 'Quả cầu lửa rực cháy.' },
+  { id: 'bang_phong', name: 'Băng phong chưởng', tier: 2, price: 0, wheel: true, fx: 'ice', color: '#a5e4ff', desc: 'Mũi băng đóng cứng đối thủ.' },
+  { id: 'loi_dien', name: 'Lôi điện quyền', tier: 3, price: 2200, fx: 'bolt', color: '#ffd23f', desc: 'Tia sét giáng thẳng xuống.' },
+  { id: 'phong_than', name: 'Phong thần cước', tier: 3, price: 0, wheel: true, fx: 'wind', color: '#caffbf', desc: 'Lốc xoáy cuốn bay đối thủ.' },
+  { id: 'than_long', name: 'Thần long bá khí', tier: 4, price: 6000, fx: 'dragon', color: '#f4a300', desc: 'Rồng vàng gầm vang đấu trường.' },
+  { id: 'cau_vong', name: 'Cầu vồng diệt thế', tier: 5, price: 0, wheel: true, fx: 'rainbow', color: '#ff595e', desc: 'Dải cầu vồng quét ngang màn hình.' },
+  { id: 'ngan_ha', name: 'Ngân hà chưởng', tier: 6, price: 0, wheel: true, fx: 'galaxy', color: '#9d4edd', desc: 'Cả dải ngân hà đổ ập xuống.' },
+];
+
 const byId = (list) => Object.fromEntries(list.map((x) => [x.id, x]));
 
 module.exports = {
-  SPECIES, POTS, DECOR, ITEMS, PETS, PET_TIERS, TIERS, RULES, expToNext, PETS_BY_ID: byId(PETS),
+  SPECIES, POTS, DECOR, ITEMS, POWERS, POWERS_BY_ID: byId(POWERS), PETS, PET_TIERS, TIERS, RULES, expToNext, PETS_BY_ID: byId(PETS),
   SPECIES_BY_ID: byId(SPECIES), POTS_BY_ID: byId(POTS), DECOR_BY_ID: byId(DECOR), ITEMS_BY_ID: byId(ITEMS),
 };

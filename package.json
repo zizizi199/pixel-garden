@@ -1,7 +1,7 @@
 {
   "name": "pixel-garden",
   "productName": "Vườn Pixel",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Vườn cây pixel dạng thanh ngang trên desktop Windows – tưới cây theo giờ làm 8h–17h.",
   "main": "src/main/main.js",
   "supabase": {

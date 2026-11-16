@@ -155,6 +155,8 @@ function groupGarden() {
   const rg = G.remoteGuard(state);
   pub.slots.forEach((s, i) => Object.assign(s, rg.slots[i] || {}));
   pub.guard = rg.guard;
+  pub.pet = state.pets.active || null;
+  pub.bag = G.arenaBag(state); // món có thể mất khi thua ở Đấu trường (server không trả phần này cho người khác)
   return pub;
 }
 
@@ -212,7 +214,8 @@ const ACTIONS = {
   water: (a) => G.water(state, a.slot),
   waterAll: () => G.waterAll(state),
   harvest: (a) => G.harvest(state, a.slot),
-  fertilize: (a) => G.fertilize(state, a.slot),
+  fertilize: (a) => G.fertilize(state, a.slot, a.item),
+  equipPower: (a) => G.equipPower(state, a.id),
   remove: (a) => G.removePlant(state, a.slot),
   clearTheft: (a) => G.clearTheft(state, a.slot),
   buy: (a) => G.buy(state, a.kind, a.id, a.qty),
@@ -412,7 +415,13 @@ app.whenReady().then(async () => {
   if (validSupabase(supabase)) {
     // net.fetch dùng mạng của Chromium → tự đi qua proxy của Windows giống trình duyệt.
     lan = new GroupRoom({ config: lanConfig, saveConfig: saveLanConfig, supabase, fetch: (u, o) => net.fetch(u, o),
-      getGarden: groupGarden, applyEvents: applyGroupEvents, applyReward: applyLanReward, changed });
+      getGarden: groupGarden, applyEvents: applyGroupEvents, applyReward: applyLanReward, changed,
+      getArena: () => ({ pet: state.pets.active || null, power: state.arena.power }),
+      applyArena: ({ gain, lose, prize, opponent }) => {
+        if (!gain && !lose) return;
+        G.arenaTransfer(state, prize, gain, String(opponent || 'đối thủ').slice(0, 24));
+        persist(); push(); updateTray();
+      } });
     lan.error = lanError;
     if (!lanError) lan.start();
   } else {
@@ -422,7 +431,7 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle('init', () => ({
-    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
+    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, powers: C.POWERS, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
     view: G.view(state),
     packs: scanPacks(),
     lan: lan.status(),
@@ -454,6 +463,12 @@ app.whenReady().then(async () => {
         if (a.type === 'chat') return await lan.chat(a.text);
         if (a.type === 'watch') return lan.watch(a.id);
         if (a.type === 'visit') return await lan.visit(a.target, a.kind, a.slot);
+        if (a.type === 'duelInvite') return await lan.duelInvite(a.target);
+        if (a.type === 'duelRespond') return await lan.duelRespond(a.id, a.accept === true);
+        if (a.type === 'duelAnswer') return await lan.duelAnswer(a.guess);
+        if (a.type === 'duelPick') return await lan.duelPick(a.idx);
+        if (a.type === 'duelForfeit') return await lan.duelForfeit();
+        if (a.type === 'duelClose') return lan.closeDuel();
         return { ok: false, msg: 'Hành động nhóm không hợp lệ.' };
       }
       if (a.type === 'host') return { ok: false, msg: 'Phòng LAN đã tắt, hãy dùng phòng Internet.' };
