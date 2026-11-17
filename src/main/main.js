@@ -482,6 +482,11 @@ app.whenReady().then(async () => {
         if (a.type === 'duelForfeit') return await lan.duelForfeit();
         if (a.type === 'duelClose') return lan.closeDuel();
         if (a.type === 'treeState') return await lan.treeState();
+        if (/^card[A-Z]/.test(String(a.type))) {
+          if (a.type === 'cardClose') return lan.closeTable();
+          return await lan.cardAction({ type: a.type, room: a.room, game: a.game, stake: Number(a.stake), invite: Array.isArray(a.invite) ? a.invite.slice(0, 10) : undefined,
+            ids: Array.isArray(a.ids) ? a.ids.slice(0, 10) : undefined, move: a.move && typeof a.move === 'object' ? a.move : undefined });
+        }
         if (a.type === 'treeWater') return await lan.treeAction({ type: 'treeWater' });
         if (a.type === 'treeFert') return await lan.treeAction({ type: 'treeFert', item: String(a.item || '') });
         if (a.type === 'treeClaim') return await lan.treeAction({ type: 'treeClaim', milestone: Number(a.milestone) });

@@ -901,3 +901,103 @@ language sql stable security definer set search_path = public as $$
 $$;
 revoke all on function public.vp_admin_list() from public, anon, authenticated;
 grant execute on function public.vp_admin_list() to service_role;
+
+-- =====================================================================================
+--  BÀN BÀI NHIỀU NGƯỜI: Tiến lên miền Nam, Phỏm (src/core/cards, server/cards.js).
+--  Cả bàn lưu ở cột data (gồm bài trên tay mọi người + nọc) – chỉ Edge Function đọc/ghi đầy đủ;
+--  game gọi vp_card_view để xem bàn: chỉ thấy bài trên tay của chính mình.
+-- =====================================================================================
+create table if not exists public.vp_card_rooms (
+  id uuid primary key,
+  group_id uuid not null references public.vp_groups (id) on delete cascade,
+  status text not null default 'waiting',
+  data jsonb not null,
+  version bigint not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists vp_card_rooms_group_idx on public.vp_card_rooms (group_id, status);
+alter table public.vp_card_rooms enable row level security;
+revoke all on public.vp_card_rooms from anon, authenticated;
+
+create or replace function public.vp_card_get(p_id uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('data', data, 'version', version) from vp_card_rooms where id = p_id;
+$$;
+
+create or replace function public.vp_card_save(p_id uuid, p_group uuid, p_status text, p_data jsonb, p_version bigint) returns boolean
+language plpgsql security definer set search_path = public as $$
+declare ok boolean;
+begin
+  if octet_length(p_data::text) > 200000 then raise exception 'Dữ liệu bàn quá lớn.'; end if;
+  if coalesce(p_version, 0) = 0 then
+    insert into vp_card_rooms (id, group_id, status, data) values (p_id, p_group, p_status, p_data) on conflict (id) do nothing;
+  else
+    update vp_card_rooms set status = p_status, data = p_data, version = version + 1, updated_at = now() where id = p_id and version = p_version;
+  end if;
+  ok := found;
+  delete from vp_card_rooms where status = 'closed' or updated_at < now() - interval '1 day';
+  return ok;
+end $$;
+
+-- người chơi có trong nhóm không, tên trong nhóm, đang ngồi bàn nào (mỗi người chỉ ngồi 1 bàn)
+create or replace function public.vp_card_mine(p_uid uuid, p_group uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'member', exists (select 1 from vp_members where group_id = p_group and user_id = p_uid),
+    'name', (select name from vp_members where group_id = p_group and user_id = p_uid),
+    'room', (select id from vp_card_rooms where status in ('waiting', 'playing', 'settling')
+             and data -> 'seats' @> jsonb_build_array(jsonb_build_object('id', p_uid)) order by updated_at desc limit 1));
+$$;
+
+-- game xem bàn (vài giây 1 lần khi đang ngồi bàn): bài trên tay chỉ trả của chính mình
+create or replace function public.vp_card_view(p_room uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); r vp_card_rooms; seat int;
+begin
+  select * into r from vp_card_rooms where id = p_room;
+  if not found then return null; end if;
+  perform vp_require_member(r.group_id);
+  select (o - 1)::int into seat from jsonb_array_elements(r.data -> 'seats') with ordinality as e(s, o) where (s ->> 'id')::uuid = uid;
+  return (r.data - 'hands' - 'secret' - 'escrow') || jsonb_build_object(
+    'seat', coalesce(seat, -1),
+    'cards', case when seat is not null and r.status = 'playing' then coalesce(r.data -> 'hands' -> seat, '[]'::jsonb) else '[]'::jsonb end,
+    'now', vp_now_ms(), 'version', r.version);
+end $$;
+
+-- danh sách bàn trong nhóm (gọi trong vp_poll)
+create or replace function public.vp_card_list(p_group uuid, uid uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(jsonb_build_object('id', id, 'game', data ->> 'game', 'stake', (data ->> 'stake')::int, 'status', status,
+      'host', data ->> 'host', 'seats', (select coalesce(jsonb_agg(jsonb_build_object('id', s ->> 'id', 'name', s ->> 'name')), '[]'::jsonb) from jsonb_array_elements(data -> 'seats') s),
+      'invited', coalesce(data -> 'invited', '[]'::jsonb) ? uid::text,
+      'mine', data -> 'seats' @> jsonb_build_array(jsonb_build_object('id', uid))) order by created_at), '[]'::jsonb)
+  from vp_card_rooms where group_id = p_group and status in ('waiting', 'playing', 'settling') and updated_at > now() - interval '3 hours';
+$$;
+
+create or replace function public.vp_poll(p_group uuid, p_away boolean, p_since bigint, p_watch uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group);
+begin
+  update vp_members set away = coalesce(p_away, false), last_seen = now() where group_id = p_group and user_id = uid;
+  return jsonb_build_object(
+    'now', vp_now_ms(),
+    'members', (select coalesce(jsonb_agg(jsonb_build_object('id', user_id, 'name', name, 'away', away,
+        'idle', extract(epoch from now() - last_seen)::int,
+        'keeper', user_id = (select keeper from vp_trees where group_id = p_group)) order by joined_at), '[]'::jsonb)
+      from vp_members where group_id = p_group),
+    'messages', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'by', user_id, 'name', name, 'body', body,
+        'at', (extract(epoch from created_at) * 1000)::bigint) order by id), '[]'::jsonb)
+      from (select * from vp_messages where group_id = p_group and id > coalesce(p_since, 0) order by id desc limit 50) m),
+    'garden', case when p_watch is null then null
+      else (select garden - 'bag' from vp_members where group_id = p_group and user_id = p_watch) end,
+    'duels', vp_my_duels(p_group, uid),
+    'tree', vp_tree_brief(p_group, uid),
+    'cards', vp_card_list(p_group, uid)
+  );
+end $$;
+
+revoke all on function public.vp_card_get(uuid), public.vp_card_save(uuid, uuid, text, jsonb, bigint), public.vp_card_mine(uuid, uuid),
+  public.vp_card_list(uuid, uuid), public.vp_card_view(uuid) from public, anon, authenticated;
+grant execute on function public.vp_card_view(uuid) to authenticated;
+grant execute on function public.vp_card_get(uuid), public.vp_card_save(uuid, uuid, text, jsonb, bigint), public.vp_card_mine(uuid, uuid) to service_role;

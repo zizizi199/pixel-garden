@@ -265,7 +265,13 @@ function fastForward(state, minutes, now = Date.now(), opts = {}) {
 }
 
 const ADMIN = {
-  money(state, a) { const n = Math.round(Number(a.amount) || 0); state.money = Math.max(0, state.money + n); return `${n >= 0 ? '+' : ''}${n} xu`; },
+  money(state, a) {
+    const n = Math.round(Number(a.amount) || 0);
+    const before = state.money;
+    state.money = Math.max(0, state.money + n); // trừ quá số đang có thì về 0
+    const d = state.money - before;
+    return `${d >= 0 ? '+' : ''}${d.toLocaleString('vi-VN')} xu (còn ${state.money.toLocaleString('vi-VN')} xu)`;
+  },
   exp(state, a) {
     const n = Math.round(Number(a.amount) || 0);
     if (n >= 0) { gainExp(state, n); return `+${n} EXP (cấp ${state.level})`; }

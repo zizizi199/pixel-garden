@@ -2106,8 +2106,10 @@ var require_garden = __commonJS({
     var ADMIN = {
       money(state, a) {
         const n = Math.round(Number(a.amount) || 0);
+        const before = state.money;
         state.money = Math.max(0, state.money + n);
-        return `${n >= 0 ? "+" : ""}${n} xu`;
+        const d = state.money - before;
+        return `${d >= 0 ? "+" : ""}${d.toLocaleString("vi-VN")} xu (c\xF2n ${state.money.toLocaleString("vi-VN")} xu)`;
       },
       exp(state, a) {
         const n = Math.round(Number(a.amount) || 0);
@@ -3149,6 +3151,930 @@ var require_snapshot = __commonJS({
   }
 });
 
+// src/core/cards/deck.js
+var require_deck = __commonJS({
+  "src/core/cards/deck.js"(exports, module) {
+    "use strict";
+    var RANKS = ["3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "2"];
+    var SUITS = ["\u2660", "\u2663", "\u2666", "\u2665"];
+    var rankOf = (c) => c >> 2;
+    var suitOf = (c) => c & 3;
+    var isRed = (c) => (c & 3) >= 2;
+    var name = (c) => `${RANKS[c >> 2]}${SUITS[c & 3]}`;
+    var phomRank = (c) => {
+      const r = c >> 2;
+      return r <= 10 ? r + 3 : r - 10;
+    };
+    function shuffled(rng = Math.random) {
+      const d = Array.from({ length: 52 }, (_, i) => i);
+      for (let i = d.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [d[i], d[j]] = [d[j], d[i]];
+      }
+      return d;
+    }
+    var validCard = (c) => Number.isInteger(c) && c >= 0 && c < 52;
+    function takeFrom(hand, cards) {
+      if (!Array.isArray(cards) || !cards.length || !cards.every(validCard) || new Set(cards).size !== cards.length) return null;
+      if (!cards.every((c) => hand.includes(c))) return null;
+      return [...cards].sort((a, b) => a - b);
+    }
+    module.exports = { RANKS, SUITS, rankOf, suitOf, isRed, name, phomRank, shuffled, validCard, takeFrom };
+  }
+});
+
+// src/core/cards/tienlen.js
+var require_tienlen = __commonJS({
+  "src/core/cards/tienlen.js"(exports, module) {
+    "use strict";
+    var { rankOf, isRed, takeFrom, name } = require_deck();
+    var HEO = 12;
+    var isHang = (c) => c && (c.type === "quad" || c.type === "dstraight" && c.len >= 3);
+    function classify(cards) {
+      const cs = [...cards].sort((a, b) => a - b);
+      const n = cs.length;
+      if (!n) return null;
+      const rs = cs.map(rankOf);
+      const top = cs[n - 1];
+      if (rs.every((r) => r === rs[0])) return [null, "single", "pair", "triple", "quad"][n] ? { type: [null, "single", "pair", "triple", "quad"][n], len: n, top } : null;
+      if (n >= 3 && rs[n - 1] < HEO && rs.every((r, i) => i === 0 || r === rs[i - 1] + 1)) return { type: "straight", len: n, top };
+      if (n >= 6 && n % 2 === 0 && rs[n - 1] < HEO) {
+        let ok = true;
+        for (let i = 0; i < n / 2 && ok; i++) ok = rs[2 * i] === rs[2 * i + 1] && (i === 0 || rs[2 * i] === rs[2 * i - 2] + 1);
+        if (ok) return { type: "dstraight", len: n / 2, top };
+      }
+      return null;
+    }
+    function beats(prev, cur) {
+      if (!prev) return true;
+      if (cur.type === prev.type && cur.len === prev.len) return cur.top > prev.top;
+      const heo1 = prev.type === "single" && rankOf(prev.top) === HEO;
+      const heo2 = prev.type === "pair" && rankOf(prev.top) === HEO;
+      if (heo1) return cur.type === "quad" || cur.type === "dstraight" && cur.len >= 3;
+      if (heo2 || prev.type === "dstraight" && prev.len === 3) return cur.type === "quad" || cur.type === "dstraight" && cur.len >= 4;
+      if (prev.type === "quad") return cur.type === "dstraight" && cur.len >= 4;
+      if (prev.type === "dstraight" && prev.len >= 4) return cur.type === "dstraight" && cur.len > prev.len;
+      return false;
+    }
+    function chopValue(combo, cards) {
+      if (rankOf(combo.top) === HEO && (combo.type === "single" || combo.type === "pair")) return cards.reduce((s, c) => s + (isRed(c) ? 2 : 1), 0);
+      if (combo.type === "quad") return 4;
+      if (combo.type === "dstraight") return combo.len >= 4 ? 5 : 3;
+      return 0;
+    }
+    var isHeoCombo = (c) => (c.type === "single" || c.type === "pair") && rankOf(c.top) === HEO;
+    function countRanks(hand) {
+      const cnt = Array(13).fill(0);
+      for (const c of hand) cnt[rankOf(c)]++;
+      return cnt;
+    }
+    function longestPairRun(cnt) {
+      let best = 0;
+      let run = 0;
+      for (let r = 0; r < HEO; r++) {
+        run = cnt[r] >= 2 ? run + 1 : 0;
+        best = Math.max(best, run);
+      }
+      return best;
+    }
+    function thoiValue(hand) {
+      let v = hand.filter((c) => rankOf(c) === HEO).reduce((s, c) => s + (isRed(c) ? 2 : 1), 0);
+      const cnt = countRanks(hand);
+      for (let r = 0; r < HEO; r++) if (cnt[r] === 4) v += 4;
+      let run = 0;
+      for (let r = 0; r <= HEO; r++) {
+        if (r < HEO && cnt[r] >= 2) {
+          run++;
+          continue;
+        }
+        if (run >= 3) v += run >= 4 ? 5 : 3;
+        run = 0;
+      }
+      return v;
+    }
+    function instantWin(hand) {
+      const cnt = countRanks(hand);
+      if (cnt[HEO] === 4) return "T\u1EE9 qu\xFD 2";
+      if (cnt.slice(0, HEO).every((x) => x > 0)) return "S\u1EA3nh r\u1ED3ng";
+      if (cnt.reduce((s, x) => s + Math.floor(x / 2), 0) >= 6) return "6 \u0111\xF4i";
+      if (longestPairRun(cnt) >= 5) return "5 \u0111\xF4i th\xF4ng";
+      return null;
+    }
+    var UNITS = {
+      2: [[1, 0, 2]],
+      3: [[2, 0, 2], [1, 0, 1]],
+      4: [[3, 0, 2], [2, 1, 1]]
+    };
+    function pushEvent(pub, ev) {
+      pub.eventId += 1;
+      pub.events.push({ id: pub.eventId, ...ev });
+      if (pub.events.length > 30) pub.events.splice(0, pub.events.length - 30);
+    }
+    function deal(n, deck, opts = {}) {
+      const hands = Array.from({ length: n }, (_, i) => deck.slice(i * 13, i * 13 + 13).sort((a, b) => a - b));
+      const pub = {
+        kind: "tienlen",
+        n,
+        turn: 0,
+        table: null,
+        passed: Array(n).fill(false),
+        out: [],
+        cong: [],
+        left: hands.map((h) => h.length),
+        played: Array(n).fill(false),
+        mustCard: null,
+        pending: null,
+        ledger: [],
+        events: [],
+        eventId: 0,
+        over: false,
+        places: null,
+        instant: null
+      };
+      pushEvent(pub, { kind: "deal" });
+      for (let k = 0; k < n; k++) {
+        const s = ((opts.leader || 0) + k) % n;
+        const why = instantWin(hands[s]);
+        if (why) {
+          pub.instant = { seat: s, why };
+          pub.over = true;
+          pub.places = [s, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== s)];
+          for (let i = 0; i < n; i++) if (i !== s) pub.ledger.push({ from: i, to: s, units: 4, why: `T\u1EDBi tr\u1EAFng (${why})` });
+          pushEvent(pub, { kind: "instant", seat: s, cards: hands[s], text: `T\u1EDBi tr\u1EAFng \u2013 ${why}!` });
+          return { hands, pub };
+        }
+      }
+      if (opts.first || !Number.isInteger(opts.leader) || opts.leader >= n) {
+        const min = Math.min(...hands.flat());
+        pub.turn = hands.findIndex((h) => h.includes(min));
+        pub.mustCard = min;
+      } else pub.turn = opts.leader;
+      return { hands, pub };
+    }
+    function nextActive(pub, from) {
+      for (let i = 1; i <= pub.n; i++) {
+        const s = (from + i) % pub.n;
+        if (!pub.out.includes(s) && !pub.cong.includes(s)) return s;
+      }
+      return from;
+    }
+    function endRound(pub) {
+      if (pub.pending) {
+        pub.ledger.push(pub.pending);
+        pub.pending = null;
+      }
+      const leader = pub.out.includes(pub.table.seat) || pub.cong.includes(pub.table.seat) ? nextActive(pub, pub.table.seat) : pub.table.seat;
+      pub.table = null;
+      pub.passed = Array(pub.n).fill(false);
+      pub.turn = leader;
+      pushEvent(pub, { kind: "round", seat: leader });
+    }
+    function advance(pub, seat) {
+      for (let i = 1; i <= pub.n; i++) {
+        const s = (seat + i) % pub.n;
+        if (pub.table && s === pub.table.seat) {
+          endRound(pub);
+          return;
+        }
+        if (!pub.out.includes(s) && !pub.cong.includes(s) && !pub.passed[s]) {
+          pub.turn = s;
+          return;
+        }
+      }
+      endRound(pub);
+    }
+    function finish(game) {
+      const { pub, hands } = game;
+      if (pub.pending) {
+        pub.ledger.push(pub.pending);
+        pub.pending = null;
+      }
+      const rest = Array.from({ length: pub.n }, (_, i) => i).filter((s) => !pub.out.includes(s) && !pub.cong.includes(s));
+      pub.places = [...pub.out, ...rest, ...pub.cong];
+      const first = pub.places[0];
+      const table = UNITS[pub.n] || UNITS[4];
+      for (const [loserIdx, winnerIdx, units] of table) {
+        const from = pub.places[loserIdx];
+        const to = pub.places[winnerIdx];
+        if (pub.cong.includes(from)) continue;
+        pub.ledger.push({ from, to, units, why: winnerIdx === 0 ? "V\u1EC1 nh\u1EA5t" : "V\u1EC1 nh\xEC" });
+      }
+      for (const s of pub.cong) pub.ledger.push({ from: s, to: first, units: 4, why: "C\xF3ng" });
+      for (const s of [...rest, ...pub.cong]) {
+        const v = thoiValue(hands[s]);
+        if (v) pub.ledger.push({ from: s, to: first, units: v, why: "Th\u1ED1i heo/h\xE0ng" });
+      }
+      pub.over = true;
+      pub.table = null;
+      pushEvent(pub, { kind: "over", seat: first, reveal: hands.map((h) => [...h]) });
+    }
+    function move(game, seat, mv) {
+      const { pub, hands } = game;
+      if (pub.over) return { ok: false, msg: "V\xE1n \u0111\xE3 k\u1EBFt th\xFAc." };
+      if (seat !== pub.turn) return { ok: false, msg: "Ch\u01B0a t\u1EDBi l\u01B0\u1EE3t b\u1EA1n." };
+      if (mv && mv.kind === "pass") {
+        if (!pub.table) return { ok: false, msg: "B\u1EA1n \u0111ang \u0111\u01B0\u1EE3c \u0111i \u2013 h\xE3y \u0111\xE1nh 1 b\u1ED9." };
+        pub.passed[seat] = true;
+        pushEvent(pub, { kind: "pass", seat });
+        advance(pub, seat);
+        return { ok: true };
+      }
+      if (!mv || mv.kind !== "play") return { ok: false, msg: "N\u01B0\u1EDBc \u0111i kh\xF4ng h\u1EE3p l\u1EC7." };
+      const cards = takeFrom(hands[seat], mv.cards);
+      if (!cards) return { ok: false, msg: "L\xE1 b\xE0i kh\xF4ng h\u1EE3p l\u1EC7." };
+      const combo = classify(cards);
+      if (!combo) return { ok: false, msg: "C\xE1c l\xE1 n\xE0y kh\xF4ng th\xE0nh b\u1ED9." };
+      if (pub.mustCard != null && !cards.includes(pub.mustCard)) return { ok: false, msg: `V\xE1n \u0111\u1EA7u ph\u1EA3i \u0111\xE1nh k\xE8m ${name(pub.mustCard)}.` };
+      const prev = pub.table;
+      if (prev && !beats(prev.combo, combo)) return { ok: false, msg: "B\u1ED9 n\xE0y kh\xF4ng ch\u1EB7n \u0111\u01B0\u1EE3c b\xE0i tr\xEAn b\xE0n." };
+      let chop = null;
+      if (prev && (isHeoCombo(prev.combo) && isHang(combo) || isHang(prev.combo) && isHang(combo))) {
+        const units = chopValue(prev.combo, prev.cards);
+        const chain = pub.pending && pub.pending.to === prev.seat ? pub.pending.units : 0;
+        pub.pending = { from: prev.seat, to: seat, units: units + chain, why: chain ? "B\u1ECB ch\u1EB7t ch\u1ED3ng" : "B\u1ECB ch\u1EB7t" };
+        chop = { from: prev.seat, units: units + chain };
+      }
+      pub.mustCard = null;
+      game.hands[seat] = hands[seat].filter((c) => !cards.includes(c));
+      pub.left[seat] = game.hands[seat].length;
+      pub.played[seat] = true;
+      pub.table = { seat, cards, combo };
+      pushEvent(pub, { kind: chop ? "chop" : "play", seat, cards, combo: combo.type, from: chop ? chop.from : void 0 });
+      if (!game.hands[seat].length) {
+        pub.out.push(seat);
+        if (pub.out.length === 1) {
+          for (let s = 0; s < pub.n; s++) if (s !== seat && !pub.played[s]) pub.cong.push(s);
+          if (pub.cong.length) pushEvent(pub, { kind: "cong", seats: [...pub.cong] });
+        }
+        pushEvent(pub, { kind: "finish", seat, place: pub.out.length });
+        if (pub.out.length + pub.cong.length >= pub.n - 1) {
+          finish(game);
+          return { ok: true };
+        }
+      }
+      advance(pub, seat);
+      return { ok: true };
+    }
+    function autoMove(game, seat) {
+      const { pub, hands } = game;
+      if (pub.table) return { kind: "pass" };
+      if (pub.mustCard != null) return { kind: "play", cards: [pub.mustCard] };
+      return { kind: "play", cards: [Math.min(...hands[seat])] };
+    }
+    module.exports = { classify, beats, chopValue, thoiValue, instantWin, deal, move, autoMove };
+  }
+});
+
+// src/core/cards/phom.js
+var require_phom = __commonJS({
+  "src/core/cards/phom.js"(exports, module) {
+    "use strict";
+    var { phomRank, suitOf, takeFrom } = require_deck();
+    var pts = (cards) => cards.reduce((s, c) => s + phomRank(c), 0);
+    function isMeld(cards) {
+      if (cards.length < 3) return false;
+      const rs = cards.map(phomRank);
+      if (rs.every((r) => r === rs[0])) return true;
+      const s0 = suitOf(cards[0]);
+      if (!cards.every((c) => suitOf(c) === s0)) return false;
+      const sorted = [...rs].sort((a, b) => a - b);
+      return sorted.every((r, i) => i === 0 || r === sorted[i - 1] + 1);
+    }
+    function allMelds(hand) {
+      const out = [];
+      const byRank = {};
+      for (const c of hand) (byRank[phomRank(c)] = byRank[phomRank(c)] || []).push(c);
+      for (const cs of Object.values(byRank)) {
+        if (cs.length >= 3) {
+          if (cs.length === 4) {
+            out.push([...cs]);
+            for (let i = 0; i < 4; i++) out.push(cs.filter((_, j) => j !== i));
+          } else out.push([...cs]);
+        }
+      }
+      for (let s = 0; s < 4; s++) {
+        const cs = hand.filter((c) => suitOf(c) === s).sort((a, b) => phomRank(a) - phomRank(b));
+        for (let i = 0; i < cs.length; i++) {
+          for (let j = i + 2; j < cs.length; j++) {
+            const seg = cs.slice(i, j + 1);
+            if (phomRank(seg[seg.length - 1]) - phomRank(seg[0]) !== seg.length - 1) break;
+            out.push(seg);
+          }
+        }
+      }
+      return out;
+    }
+    function best(hand, must = []) {
+      const melds = allMelds(hand).filter((m) => m.filter((c) => must.includes(c)).length <= 1);
+      let bestR = null;
+      const used = /* @__PURE__ */ new Set();
+      const chosen = [];
+      function rec(i) {
+        if (must.every((c) => used.has(c))) {
+          const dead = hand.filter((c) => !used.has(c));
+          const p = pts(dead);
+          if (!bestR || p < bestR.points || p === bestR.points && dead.length < bestR.dead.length) {
+            bestR = { melds: chosen.map((m) => [...m]), dead, points: p };
+          }
+        }
+        for (let k = i; k < melds.length; k++) {
+          const m = melds[k];
+          if (m.some((c) => used.has(c))) continue;
+          m.forEach((c) => used.add(c));
+          chosen.push(m);
+          rec(k + 1);
+          chosen.pop();
+          m.forEach((c) => used.delete(c));
+        }
+      }
+      rec(0);
+      return bestR;
+    }
+    function uKhan(hand) {
+      for (let i = 0; i < hand.length; i++) {
+        for (let j = i + 1; j < hand.length; j++) {
+          const a = hand[i];
+          const b = hand[j];
+          if (phomRank(a) === phomRank(b)) return false;
+          if (suitOf(a) === suitOf(b) && Math.abs(phomRank(a) - phomRank(b)) <= 2) return false;
+        }
+      }
+      return true;
+    }
+    function canExtend(meld, c) {
+      return isMeld([...meld, c]);
+    }
+    function pushEvent(pub, ev) {
+      pub.eventId += 1;
+      pub.events.push({ id: pub.eventId, ...ev });
+      if (pub.events.length > 30) pub.events.splice(0, pub.events.length - 30);
+    }
+    function deal(n, deck, opts = {}) {
+      const leader = Number.isInteger(opts.leader) && opts.leader < n ? opts.leader : 0;
+      const hands = [];
+      let k = 0;
+      for (let i = 0; i < n; i++) {
+        const take = i === leader ? 10 : 9;
+        hands.push(deck.slice(k, k + take).sort((a, b2) => a - b2));
+        k += take;
+      }
+      const stock = deck.slice(k);
+      const pub = {
+        kind: "phom",
+        n,
+        turn: leader,
+        phase: "discard",
+        stock: stock.length,
+        discards: hands.map(() => []),
+        last: null,
+        eaten: hands.map(() => []),
+        melds: hands.map(() => []),
+        laid: Array(n).fill(false),
+        layOrder: [],
+        done: Array(n).fill(0),
+        left: hands.map((h) => h.length),
+        ledger: [],
+        events: [],
+        eventId: 0,
+        over: false,
+        places: null,
+        points: null,
+        mom: [],
+        u: null
+      };
+      pushEvent(pub, { kind: "deal" });
+      const game = { pub, hands, stock };
+      for (let i = 0; i < n; i++) {
+        const s = (leader + i) % n;
+        if (uKhan(hands[s])) {
+          declareU(game, s, "\xD9 khan", null);
+          return game;
+        }
+      }
+      const b = best(hands[leader]);
+      if (b && b.dead.length <= 1) declareU(game, leader, "\xD9 tr\xF2n", null);
+      return game;
+    }
+    function declareU(game, seat, why, den) {
+      const { pub, hands } = game;
+      pub.over = true;
+      pub.u = { seat, why, den };
+      const others = Array.from({ length: pub.n }, (_, i) => i).filter((i) => i !== seat);
+      pub.places = [seat, ...others];
+      if (den != null) pub.ledger.push({ from: den, to: seat, units: 5 * others.length, why: `\u0110\u1EC1n ${why}` });
+      else for (const o of others) pub.ledger.push({ from: o, to: seat, units: 5, why });
+      pushEvent(pub, { kind: "u", seat, text: `${why}!`, reveal: hands.map((h) => [...h]) });
+    }
+    function checkU(game, seat, den) {
+      const b = best(game.hands[seat], game.pub.eaten[seat]);
+      if (b && b.dead.length <= 1) {
+        declareU(game, seat, "\xD9", den);
+        return true;
+      }
+      return false;
+    }
+    function layDown(game, seat, keep) {
+      const { pub } = game;
+      const hand = game.hands[seat].filter((c) => c !== keep);
+      const b = best(hand, pub.eaten[seat]) || { melds: [], dead: hand };
+      pub.melds[seat] = b.melds.map((m) => [...m].sort((x, y) => x - y));
+      pub.laid[seat] = true;
+      pub.layOrder.push(seat);
+      if (!b.melds.length) pub.mom.push(seat);
+      let dead = [...b.dead].sort((x, y) => phomRank(y) - phomRank(x));
+      const sent = [];
+      let changed = true;
+      while (changed && b.melds.length) {
+        changed = false;
+        for (const c of dead) {
+          const target = pub.melds.findIndex((ms, s) => s !== seat && ms.some((m2) => canExtend(m2, c)));
+          if (target < 0) continue;
+          const m = pub.melds[target].find((mm) => canExtend(mm, c));
+          m.push(c);
+          m.sort((x, y) => x - y);
+          sent.push({ card: c, to: target });
+          dead = dead.filter((x) => x !== c);
+          changed = true;
+          break;
+        }
+      }
+      game.hands[seat] = [...dead, keep].sort((x, y) => x - y);
+      pushEvent(pub, { kind: "lay", seat, melds: pub.melds[seat], sent, mom: !b.melds.length });
+    }
+    function finish(game) {
+      const { pub, hands } = game;
+      pub.points = hands.map((h) => pts(h));
+      const order = pub.layOrder.length === pub.n ? pub.layOrder : Array.from({ length: pub.n }, (_, i) => i);
+      const ok = order.filter((s) => !pub.mom.includes(s)).sort((a, b) => pub.points[a] - pub.points[b] || order.indexOf(a) - order.indexOf(b));
+      pub.places = [...ok, ...order.filter((s) => pub.mom.includes(s))];
+      const first = pub.places[0];
+      pub.places.forEach((s, k) => {
+        if (k === 0) return;
+        if (pub.mom.includes(s)) pub.ledger.push({ from: s, to: first, units: 4, why: "M\xF3m" });
+        else if (k === pub.n - 1) pub.ledger.push({ from: s, to: first, units: 3, why: "V\u1EC1 b\xE9t" });
+        else pub.ledger.push({ from: s, to: first, units: k, why: k === 1 ? "V\u1EC1 nh\xEC" : "V\u1EC1 ba" });
+      });
+      pub.over = true;
+      pushEvent(pub, { kind: "over", seat: first, reveal: hands.map((h) => [...h]) });
+    }
+    function move(game, seat, mv) {
+      const { pub } = game;
+      if (pub.over) return { ok: false, msg: "V\xE1n \u0111\xE3 k\u1EBFt th\xFAc." };
+      if (seat !== pub.turn) return { ok: false, msg: "Ch\u01B0a t\u1EDBi l\u01B0\u1EE3t b\u1EA1n." };
+      const kind = mv && mv.kind;
+      if (pub.phase === "draw") {
+        if (kind === "eat") {
+          const l = pub.last;
+          if (!l) return { ok: false, msg: "Kh\xF4ng c\xF3 l\xE1 \u0111\u1EC3 \u0103n." };
+          const hand = [...game.hands[seat], l.card];
+          const must = [...pub.eaten[seat], l.card];
+          if (!best(hand, must)) return { ok: false, msg: "L\xE1 n\xE0y kh\xF4ng gh\xE9p \u0111\u01B0\u1EE3c ph\u1ECFm v\u1EDBi b\xE0i c\u1EE7a b\u1EA1n." };
+          game.hands[seat] = hand.sort((a, b) => a - b);
+          pub.eaten[seat].push(l.card);
+          pub.discards[l.seat] = pub.discards[l.seat].filter((c2) => c2 !== l.card);
+          pub.ledger.push({ from: l.seat, to: seat, units: l.chot ? 4 : 1, why: l.chot ? "B\u1ECB \u0103n ch\u1ED1t" : "B\u1ECB \u0103n b\xE0i" });
+          pushEvent(pub, { kind: "eat", seat, from: l.seat, card: l.card, chot: l.chot });
+          pub.last = null;
+          pub.left[seat] = game.hands[seat].length;
+          if (checkU(game, seat, l.seat)) return { ok: true };
+        } else if (kind === "draw") {
+          if (!game.stock.length) {
+            for (let i = 0; i < pub.n; i++) if (!pub.laid[i]) {
+              const h = game.hands[i];
+              layDown(game, i, h[h.length - 1]);
+            }
+            finish(game);
+            return { ok: true };
+          }
+          const c2 = game.stock.pop();
+          game.hands[seat] = [...game.hands[seat], c2].sort((a, b) => a - b);
+          pub.stock = game.stock.length;
+          pub.last = null;
+          pub.left[seat] = game.hands[seat].length;
+          pushEvent(pub, { kind: "draw", seat });
+          if (checkU(game, seat, null)) return { ok: true };
+        } else return { ok: false, msg: "H\xE3y b\u1ED1c b\xE0i ho\u1EB7c \u0103n l\xE1 v\u1EEBa \u0111\xE1nh." };
+        pub.phase = "discard";
+        return { ok: true };
+      }
+      if (kind !== "discard") return { ok: false, msg: "H\xE3y ch\u1ECDn 1 l\xE1 \u0111\u1EC3 \u0111\xE1nh." };
+      const c = mv.card;
+      if (!takeFrom(game.hands[seat], [c])) return { ok: false, msg: "L\xE1 b\xE0i kh\xF4ng h\u1EE3p l\u1EC7." };
+      if (pub.eaten[seat].includes(c)) return { ok: false, msg: "Kh\xF4ng \u0111\u01B0\u1EE3c \u0111\xE1nh l\xE1 \u0111\xE3 \u0103n." };
+      if (!best(game.hands[seat].filter((x) => x !== c), pub.eaten[seat])) return { ok: false, msg: "\u0110\xE1nh l\xE1 n\xE0y th\xEC l\xE1 \u0111\xE3 \u0103n kh\xF4ng c\xF2n th\xE0nh ph\u1ECFm." };
+      const final = pub.done[seat] === 3;
+      if (final) layDown(game, seat, c);
+      game.hands[seat] = game.hands[seat].filter((x) => x !== c);
+      pub.discards[seat].push(c);
+      pub.done[seat] += 1;
+      pub.left[seat] = game.hands[seat].length;
+      pub.last = { card: c, seat, chot: final };
+      pushEvent(pub, { kind: "discard", seat, card: c, chot: final });
+      if (pub.done.every((d) => d >= 4)) {
+        pub.last = null;
+        finish(game);
+        return { ok: true };
+      }
+      pub.turn = (seat + 1) % pub.n;
+      pub.phase = "draw";
+      return { ok: true };
+    }
+    function suggestDiscard(game, seat) {
+      const hand = game.hands[seat];
+      const eaten = game.pub.eaten[seat];
+      const cands = hand.filter((c) => !eaten.includes(c) && best(hand.filter((x) => x !== c), eaten));
+      let pick = null;
+      let bestPts = Infinity;
+      for (const c of cands) {
+        const b = best(hand.filter((x) => x !== c), eaten);
+        if (b.points < bestPts || b.points === bestPts && phomRank(c) > phomRank(pick)) {
+          bestPts = b.points;
+          pick = c;
+        }
+      }
+      return pick == null ? hand.find((c) => !eaten.includes(c)) : pick;
+    }
+    function autoMove(game, seat) {
+      if (game.pub.phase === "draw") return { kind: "draw" };
+      return { kind: "discard", card: suggestDiscard(game, seat) };
+    }
+    function canEat(game, seat) {
+      const { pub } = game;
+      if (pub.over || pub.turn !== seat || pub.phase !== "draw" || !pub.last) return false;
+      return !!best([...game.hands[seat], pub.last.card], [...pub.eaten[seat], pub.last.card]);
+    }
+    module.exports = { isMeld, allMelds, best, uKhan, deal, move, autoMove, canEat, suggestDiscard, pts };
+  }
+});
+
+// src/core/cards/room.js
+var require_room = __commonJS({
+  "src/core/cards/room.js"(exports, module) {
+    "use strict";
+    var D = require_deck();
+    var TL = require_tienlen();
+    var PH = require_phom();
+    var GAMES = {
+      tienlen: { name: "Ti\u1EBFn l\xEAn mi\u1EC1n Nam", engine: TL, min: 2, max: 4 },
+      phom: { name: "Ph\u1ECFm", engine: PH, min: 2, max: 4 }
+    };
+    var TURN_MS = 2e4;
+    var AWAY_MS = 1500;
+    var DEPOSIT = 12;
+    var STAKE = { min: 10, max: 500 };
+    var cleanName = (s) => String(s || "").replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 24) || "Ng\u01B0\u1EDDi ch\u01A1i";
+    function create({ id, group, game: game2, stake, host, name, now }) {
+      if (!GAMES[game2]) return { ok: false, msg: "Tr\xF2 ch\u01A1i kh\xF4ng h\u1EE3p l\u1EC7." };
+      stake = Math.round(Number(stake) || 0);
+      if (stake < STAKE.min || stake > STAKE.max) return { ok: false, msg: `M\u1EE9c c\u01B0\u1EE3c t\u1EEB ${STAKE.min} \u0111\u1EBFn ${STAKE.max} xu.` };
+      return { ok: true, room: {
+        id,
+        group,
+        game: game2,
+        stake,
+        host,
+        seats: [{ id: host, name: cleanName(name), away: false }],
+        invited: [],
+        status: "waiting",
+        hand: 0,
+        leaderId: null,
+        pub: null,
+        hands: null,
+        secret: {},
+        deadline: 0,
+        result: null,
+        escrow: {},
+        created: now,
+        updated: now
+      } };
+    }
+    var seatOf = (room, uid) => room.seats.findIndex((s) => s.id === uid);
+    function join(room, uid, name) {
+      if (seatOf(room, uid) >= 0) {
+        room.seats[seatOf(room, uid)].away = false;
+        return { ok: true, msg: "\u0110\xE3 v\xE0o l\u1EA1i b\xE0n." };
+      }
+      if (room.status !== "waiting") return { ok: false, msg: "B\xE0n \u0111ang ch\u01A1i, \u0111\u1EE3i h\u1EBFt v\xE1n nh\xE9." };
+      if (room.seats.length >= GAMES[room.game].max) return { ok: false, msg: "B\xE0n \u0111\xE3 \u0111\u1EE7 ng\u01B0\u1EDDi." };
+      room.seats.push({ id: uid, name: cleanName(name), away: false });
+      room.invited = room.invited.filter((x) => x !== uid);
+      return { ok: true, msg: "\u0110\xE3 v\xE0o b\xE0n." };
+    }
+    function leave(room, uid) {
+      const i = seatOf(room, uid);
+      if (i < 0) return { ok: true };
+      if (room.status === "waiting") {
+        room.seats.splice(i, 1);
+        if (!room.seats.length) room.status = "closed";
+        else if (room.host === uid) room.host = room.seats[0].id;
+        return { ok: true, msg: "\u0110\xE3 r\u1EDDi b\xE0n." };
+      }
+      room.seats[i].away = true;
+      if (room.status === "playing" && room.pub && room.pub.turn === i) room.deadline = Math.min(room.deadline, Date.now() + AWAY_MS);
+      return { ok: true, msg: "B\u1EA1n s\u1EBD r\u1EDDi b\xE0n khi h\u1EBFt v\xE1n (m\xE1y t\u1EF1 \u0111\xE1nh h\u1ED9 ph\u1EA7n c\xF2n l\u1EA1i)." };
+    }
+    function invite(room, uid, ids) {
+      if (room.host !== uid) return { ok: false, msg: "Ch\u1EC9 ch\u1EE7 b\xE0n m\u1EDBi m\u1EDDi \u0111\u01B0\u1EE3c." };
+      const list = (Array.isArray(ids) ? ids : []).filter((x) => typeof x === "string" && seatOf(room, x) < 0).slice(0, 10);
+      room.invited = [.../* @__PURE__ */ new Set([...room.invited, ...list])].slice(-20);
+      return { ok: true, msg: list.length ? "\u0110\xE3 g\u1EEDi l\u1EDDi m\u1EDDi." : "Ch\u01B0a ch\u1ECDn ai \u0111\u1EC3 m\u1EDDi." };
+    }
+    function game(room) {
+      return { pub: room.pub, hands: room.hands, stock: room.secret.stock || [] };
+    }
+    function setDeadline(room, now) {
+      const s = room.seats[room.pub.turn];
+      room.deadline = now + (s && s.away ? AWAY_MS : TURN_MS);
+      room.pub.deadline = room.deadline;
+    }
+    function startHand(room, now, rng = Math.random) {
+      const n = room.seats.length;
+      const leader = room.leaderId ? seatOf(room, room.leaderId) : -1;
+      const eng = GAMES[room.game].engine;
+      const g = eng.deal(n, D.shuffled(rng), { first: room.hand === 0 || leader < 0, leader: leader < 0 ? 0 : leader });
+      room.hand += 1;
+      room.status = "playing";
+      room.pub = g.pub;
+      room.hands = g.hands;
+      room.secret = { ...room.secret, stock: g.stock || [] };
+      room.result = null;
+      room.pub.hand = room.hand;
+      if (room.pub.over) return afterOver(room);
+      setDeadline(room, now);
+      return { ok: true };
+    }
+    function settle(room) {
+      const n = room.seats.length;
+      const units = Array(n).fill(0);
+      for (const l of room.pub.ledger) {
+        units[l.from] -= l.units;
+        units[l.to] += l.units;
+      }
+      const cap = room.stake * DEPOSIT;
+      const loss = units.map((u) => u < 0 ? Math.min(cap, -u * room.stake) : 0);
+      const paid = loss.reduce((a, b) => a + b, 0);
+      const gainUnits = units.reduce((a, u) => a + Math.max(0, u), 0);
+      const net = units.map((u, i) => u < 0 ? -loss[i] : 0);
+      let given = 0;
+      units.forEach((u, i) => {
+        if (u > 0) {
+          const x = Math.floor(paid * u / gainUnits);
+          net[i] = x;
+          given += x;
+        }
+      });
+      if (paid - given > 0) net[room.pub.places[0]] += paid - given;
+      return { net, places: room.pub.places, lines: room.pub.ledger.map((l) => ({ ...l, xu: l.units * room.stake })) };
+    }
+    function afterOver(room) {
+      room.status = "settling";
+      room.result = { hand: room.hand, ...settle(room), names: room.seats.map((s) => s.name), ids: room.seats.map((s) => s.id) };
+      room.leaderId = room.seats[room.pub.places[0]].id;
+      room.deadline = 0;
+      room.pub.deadline = 0;
+      return { ok: true, over: true };
+    }
+    function settled(room) {
+      room.status = "waiting";
+      room.escrow = {};
+      room.seats = room.seats.filter((s) => !s.away);
+      if (!room.seats.length) room.status = "closed";
+      else if (seatOf(room, room.host) < 0) room.host = room.seats[0].id;
+    }
+    function play(room, uid, mv, now) {
+      if (room.status !== "playing") return { ok: false, msg: "V\xE1n ch\u01B0a b\u1EAFt \u0111\u1EA7u." };
+      const seat = seatOf(room, uid);
+      if (seat < 0) return { ok: false, msg: "B\u1EA1n kh\xF4ng ng\u1ED3i b\xE0n n\xE0y." };
+      const r = GAMES[room.game].engine.move(game(room), seat, mv);
+      if (!r.ok) return r;
+      room.seats[seat].away = false;
+      if (room.pub.over) return afterOver(room);
+      setDeadline(room, now);
+      return { ok: true };
+    }
+    function tick(room, now) {
+      let moves = 0;
+      while (room.status === "playing" && now >= room.deadline && moves < 400) {
+        const seat = room.pub.turn;
+        const eng = GAMES[room.game].engine;
+        const g = game(room);
+        const r = eng.move(g, seat, eng.autoMove(g, seat));
+        if (!r.ok) throw new Error(`T\u1EF1 \u0111\xE1nh l\u1ED7i: ${r.msg}`);
+        moves++;
+        if (room.pub.over) {
+          afterOver(room);
+          break;
+        }
+        const s = room.seats[room.pub.turn];
+        room.deadline = s && s.away ? room.deadline + AWAY_MS : Math.max(now, room.deadline) + TURN_MS;
+        room.pub.deadline = room.deadline;
+        if (!(s && s.away)) break;
+      }
+      return moves;
+    }
+    function viewFor(room, uid, now) {
+      const seat = seatOf(room, uid);
+      const v = {
+        id: room.id,
+        game: room.game,
+        stake: room.stake,
+        host: room.host,
+        seats: room.seats,
+        invited: room.invited,
+        status: room.status,
+        hand: room.hand,
+        pub: room.pub,
+        result: room.result,
+        seat,
+        now,
+        deposit: room.stake * DEPOSIT
+      };
+      v.cards = seat >= 0 && room.hands && room.status === "playing" ? room.hands[seat] : [];
+      if (room.game === "phom" && seat >= 0 && room.status === "playing") {
+        v.canEat = PH.canEat(game(room), seat);
+        v.suggest = room.pub.turn === seat && room.pub.phase === "discard" ? PH.suggestDiscard(game(room), seat) : null;
+      }
+      return v;
+    }
+    module.exports = { GAMES, TURN_MS, AWAY_MS, DEPOSIT, STAKE, create, join, leave, invite, startHand, play, tick, settle, settled, viewFor, seatOf };
+  }
+});
+
+// server/cards.js
+var require_cards = __commonJS({
+  "server/cards.js"(exports, module) {
+    "use strict";
+    var R = require_room();
+    var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    var OTHER = { tz: NaN, group: null };
+    var fail = (msg) => ({ ok: true, r: { ok: false, msg } });
+    function cleanMove(m) {
+      if (!m || typeof m !== "object") return null;
+      const kind = String(m.kind || "");
+      if (!["play", "pass", "draw", "eat", "discard"].includes(kind)) return null;
+      const out = { kind };
+      if (kind === "play") out.cards = Array.isArray(m.cards) ? m.cards.slice(0, 13).map(Number) : [];
+      if (kind === "discard") out.card = Number(m.card);
+      return out;
+    }
+    function createCards({ rpc, mutate, snapshot, now, rng, newId }) {
+      async function getRoom(id) {
+        const r = await rpc("vp_card_get", { p_id: id });
+        return r && r.data ? { room: r.data, version: Number(r.version) } : null;
+      }
+      const saveRoom = async (room, version) => await rpc("vp_card_save", { p_id: room.id, p_group: room.group, p_status: room.status, p_data: room, p_version: version }) === true;
+      async function withRoom(id, fn) {
+        for (let attempt = 0; attempt < 8; attempt++) {
+          if (attempt) await new Promise((r) => setTimeout(r, 20 + Math.floor(rng() * 60 * attempt)));
+          const rec = await getRoom(id);
+          if (!rec) return { ok: false, msg: "B\xE0n n\xE0y kh\xF4ng c\xF2n n\u1EEFa." };
+          const out = fn(rec.room) || { ok: true };
+          if (out.noSave) return { ...out, room: rec.room };
+          if (await saveRoom(rec.room, rec.version)) return { ...out, room: rec.room };
+        }
+        return { ok: false, msg: "B\xE0n \u0111ang b\u1EADn, th\u1EED l\u1EA1i." };
+      }
+      async function pay(uid, key, delta, text) {
+        const m = await mutate(uid, OTHER, (state, t) => {
+          const seen = state.serverSeen.cards || (state.serverSeen.cards = []);
+          if (seen.includes(key)) return { r: { ok: true }, skipSave: true };
+          if (delta < 0 && state.money < -delta) return { r: { ok: false }, skipSave: true };
+          state.money += delta;
+          seen.push(key);
+          state.serverSeen.cards = seen.slice(-200);
+          if (text) state.log.unshift({ at: t, type: "system", text });
+          return { r: { ok: true }, push: false };
+        });
+        return m.out.r.ok;
+      }
+      async function settleRoom(id) {
+        const rec = await getRoom(id);
+        if (!rec || rec.room.status !== "settling") return;
+        const { room } = rec;
+        const res = room.result;
+        const esc = room.escrow || {};
+        const game = R.GAMES[room.game].name;
+        let all = true;
+        for (let i = 0; i < res.ids.length; i++) {
+          const back = (esc.amount || 0) + res.net[i];
+          const d = res.net[i];
+          const text = `${game}: ${d > 0 ? `th\u1EAFng +${d}` : d < 0 ? `thua ${d}` : "ho\xE0 0"} xu (v\xE1n ${res.hand}).`;
+          try {
+            if (!await pay(res.ids[i], `${id}:${res.hand}:${esc.nonce}:out`, back, text)) all = false;
+          } catch (_) {
+            all = false;
+          }
+        }
+        if (all) await withRoom(id, (r) => {
+          if (r.status !== "settling" || !r.result || r.result.hand !== res.hand) return { noSave: true };
+          R.settled(r);
+          return { ok: true };
+        });
+      }
+      async function act(uid, a, ctx) {
+        const group = ctx.group;
+        if (!UUID.test(String(group || ""))) return fail("H\xE3y v\xE0o nh\xF3m tr\u01B0\u1EDBc.");
+        const t = now();
+        if (a.type === "cardCreate" || a.type === "cardJoin") {
+          const mine = await rpc("vp_card_mine", { p_uid: uid, p_group: group });
+          if (!mine || !mine.member) return fail("B\u1EA1n kh\xF4ng c\xF2n trong nh\xF3m.");
+          if (mine.room && mine.room !== a.room) return fail("B\u1EA1n \u0111ang ng\u1ED3i \u1EDF m\u1ED9t b\xE0n kh\xE1c \u2013 r\u1EDDi b\xE0n \u0111\xF3 tr\u01B0\u1EDBc.");
+          if (a.type === "cardCreate") {
+            const c = R.create({ id: newId(), group, game: a.game, stake: a.stake, host: uid, name: mine.name, now: t });
+            if (!c.ok) return fail(c.msg);
+            R.invite(c.room, uid, a.invite);
+            if (!await saveRoom(c.room, 0)) return fail("Kh\xF4ng t\u1EA1o \u0111\u01B0\u1EE3c b\xE0n, th\u1EED l\u1EA1i.");
+            return { ok: true, r: { ok: true, msg: "\u0110\xE3 m\u1EDF b\xE0n.", room: c.room.id } };
+          }
+          if (!UUID.test(String(a.room))) return fail("B\xE0n kh\xF4ng h\u1EE3p l\u1EC7.");
+          const out = await withRoom(a.room, (room) => {
+            if (room.group !== group) return { ok: false, msg: "B\xE0n n\xE0y kh\xF4ng thu\u1ED9c nh\xF3m c\u1EE7a b\u1EA1n.", noSave: true };
+            const r = R.join(room, uid, mine.name);
+            return r.ok ? r : { ...r, noSave: true };
+          });
+          return { ok: true, r: { ok: out.ok, msg: out.msg, room: a.room } };
+        }
+        if (!UUID.test(String(a.room))) return fail("B\xE0n kh\xF4ng h\u1EE3p l\u1EC7.");
+        switch (a.type) {
+          case "cardLeave":
+          case "cardInvite": {
+            const out = await withRoom(a.room, (room) => {
+              const r = a.type === "cardLeave" ? R.leave(room, uid) : R.invite(room, uid, a.ids);
+              return r.ok ? r : { ...r, noSave: true };
+            });
+            if (out.room && out.room.status === "settling") await settleRoom(a.room);
+            return { ok: true, r: { ok: out.ok, msg: out.msg } };
+          }
+          case "cardStart": {
+            const rec = await getRoom(a.room);
+            if (!rec) return fail("B\xE0n n\xE0y kh\xF4ng c\xF2n n\u1EEFa.");
+            const room0 = rec.room;
+            if (room0.host !== uid) return fail("Ch\u1EC9 ch\u1EE7 b\xE0n m\u1EDBi b\u1EAFt \u0111\u1EA7u \u0111\u01B0\u1EE3c.");
+            if (room0.status !== "waiting") return fail("V\xE1n \u0111ang ch\u01A1i.");
+            if (room0.seats.length < R.GAMES[room0.game].min) return fail("C\u1EA7n \xEDt nh\u1EA5t 2 ng\u01B0\u1EDDi.");
+            const amount = room0.stake * R.DEPOSIT;
+            const nonce = Math.floor(rng() * 1e9).toString(36);
+            const ids = room0.seats.map((s) => s.id);
+            const hand = room0.hand + 1;
+            const done = [];
+            let short = null;
+            for (const s of room0.seats) {
+              if (await pay(s.id, `${a.room}:${hand}:${nonce}:in`, -amount, null)) done.push(s.id);
+              else {
+                short = s.name;
+                break;
+              }
+            }
+            const refund = async () => {
+              for (const id of done) await pay(id, `${a.room}:${hand}:${nonce}:refund`, amount, null).catch(() => {
+              });
+            };
+            if (short) {
+              await refund();
+              return fail(`${short} kh\xF4ng \u0111\u1EE7 ${amount} xu \u0111\u1EC3 gi\u1EEF c\u1ECDc (${R.DEPOSIT} \xD7 m\u1EE9c c\u01B0\u1EE3c).`);
+            }
+            const out = await withRoom(a.room, (room) => {
+              if (room.status !== "waiting" || room.seats.map((s) => s.id).join() !== ids.join()) return { ok: false, msg: "B\xE0n v\u1EEBa thay \u0111\u1ED5i, b\u1EA5m B\u1EAFt \u0111\u1EA7u l\u1EA1i.", noSave: true };
+              room.escrow = { nonce, amount, ids };
+              return R.startHand(room, t, rng);
+            });
+            if (!out.ok) {
+              await refund();
+              return fail(out.msg);
+            }
+            if (out.room.status === "settling") await settleRoom(a.room);
+            return { ok: true, r: { ok: true, msg: "Chia b\xE0i!" }, own: await snapshot(uid) };
+          }
+          case "cardMove":
+          case "cardTick": {
+            const mv = a.type === "cardMove" ? cleanMove(a.move) : null;
+            if (a.type === "cardMove" && !mv) return fail("N\u01B0\u1EDBc \u0111i kh\xF4ng h\u1EE3p l\u1EC7.");
+            const out = await withRoom(a.room, (room) => {
+              if (room.status === "settling") return { ok: true, noSave: true };
+              const auto = room.status === "playing" ? R.tick(room, t) : 0;
+              if (!mv) return auto ? { ok: true } : { ok: true, noSave: true };
+              if (room.status !== "playing") return { ok: false, msg: "V\xE1n \u0111\xE3 k\u1EBFt th\xFAc.", noSave: !auto };
+              const r = R.play(room, uid, mv, t);
+              return r.ok ? r : { ...r, noSave: !auto };
+            });
+            let own = null;
+            if (out.room && out.room.status === "settling") {
+              await settleRoom(a.room);
+              own = await snapshot(uid);
+            }
+            return { ok: true, r: { ok: out.ok, msg: out.msg }, own };
+          }
+          default:
+            return fail("H\xE0nh \u0111\u1ED9ng b\xE0n b\xE0i kh\xF4ng h\u1EE3p l\u1EC7.");
+        }
+      }
+      return { act, settleRoom };
+    }
+    var CARD_TYPES = /* @__PURE__ */ new Set(["cardCreate", "cardJoin", "cardLeave", "cardInvite", "cardStart", "cardMove", "cardTick"]);
+    module.exports = { createCards, CARD_TYPES };
+  }
+});
+
 // server/game.js
 var require_game = __commonJS({
   "server/game.js"(exports, module) {
@@ -3159,6 +4085,7 @@ var require_game = __commonJS({
     var A = require_actions();
     var CL = require_clock();
     var { groupGarden } = require_snapshot();
+    var { createCards, CARD_TYPES } = require_cards();
     var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     var ADMIN_WINDOW_MS = 2 * 60 * 1e3;
     var SEEN_MAX = 300;
@@ -3418,6 +4345,14 @@ var require_game = __commonJS({
         });
         return self ? reply(m, { r: m.out.r }) : { ok: true, r: m.out.r };
       }
+      async function snapshot(uid) {
+        const rec = await load(uid);
+        if (!rec) return null;
+        const { state, t } = prepare(rec, {});
+        return { state: publicState(state), mg: MG.info(state, t) };
+      }
+      const newId = () => globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) => (c ^ Math.random() * 16 >> c / 4).toString(16));
+      const cards = createCards({ rpc, mutate, snapshot, now, rng, newId });
       const GROUP_TYPES = /* @__PURE__ */ new Set(["visit", "treeWater", "treeFert", "treeClaim", "treeClaimTop", "duelInvite", "duelRespond", "duelSettle"]);
       async function handle(body, uid) {
         if (!body || typeof body !== "object") throw new HttpError(400, "Y\xEAu c\u1EA7u kh\xF4ng h\u1EE3p l\u1EC7.");
@@ -3438,6 +4373,15 @@ var require_game = __commonJS({
         if (!a || typeof a !== "object" || typeof a.type !== "string") throw new HttpError(400, "H\xE0nh \u0111\u1ED9ng kh\xF4ng h\u1EE3p l\u1EC7.");
         if (A.ADMIN_TYPES.has(a.type) && !isAdmin) return { ok: true, r: { ok: false, msg: "Admin \u0111\xE3 t\u1EAFt." } };
         if (a.type === "adminList" || a.type === "adminUser") return adminAccounts(uid, a, ctx);
+        if (CARD_TYPES.has(a.type)) {
+          const out = await cards.act(uid, a, ctx);
+          if (out.own) {
+            out.state = out.own.state;
+            out.mg = out.own.mg;
+          }
+          delete out.own;
+          return out;
+        }
         if (a.type === "tick") return tick(uid, ctx);
         if (GROUP_TYPES.has(a.type)) return groupAction(uid, a, ctx);
         return gameAction(uid, a, ctx, isAdmin);

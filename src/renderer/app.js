@@ -21,7 +21,9 @@
   let fertKind = 'phan_bon'; // loại phân công cụ 🌱 đang dùng
   let arenaOpened = null; // id trận đã tự mở đấu trường
   let arenaShown = false; // đấu trường đang hiện đè lên vườn (thanh cao lên)
-  let tall = null; // thanh vườn đang cao lên cho: 'duel' (đấu trường) | 'game' (mini game)
+  let tall = null; // thanh vườn đang cao lên cho: 'duel' (đấu trường) | 'game' (mini game) | 'cards' (bàn bài)
+  let tableOpened = null; // id bàn bài đã tự mở
+  const dismissedInv = new Set(); // lời mời chơi bài đã bỏ qua
   const FISH = {};
   let treeData = null; // Thần mộc: dữ liệu đầy đủ khi mở bảng
 
@@ -105,6 +107,7 @@
       else if (!tall) {
         arenaShown = false; const av = $('#arena-view'); if (av) av.remove();
         const gv0 = $('#game-view'); if (gv0) { gv0.remove(); if (window.MiniGames) MiniGames.stop(); }
+        const cv0 = $('#cards-view'); if (cv0) cv0.remove();
       }
     }
     document.body.classList.add(`mode-${m}`);
@@ -119,6 +122,7 @@
       if (tall === 'game' && window.MiniGames) MiniGames.stop();
       const g0 = $('#game-view'); if (g0) g0.remove();
       const a0 = $('#arena-view'); if (a0) a0.remove();
+      const c0 = $('#cards-view'); if (c0) c0.remove();
       arenaShown = false; tall = null;
     }
     panel = name; panelArg = arg; sub = subTab;
@@ -743,6 +747,111 @@
       },
       exitTall: () => { const v = $('#game-view'); if (v) v.remove(); tall = null; if (mode === 'arena') api.setLayout('bar'); } };
   }
+
+  // ------------------------------------------------------------ bàn bài nhiều người (Tiến lên, Phỏm)
+  function showTable() {
+    if (arenaShown) hideArena();
+    if (tall === 'game') { if (window.MiniGames) MiniGames.stop(); const g0 = $('#game-view'); if (g0) g0.remove(); }
+    if (panel) { panel = null; $('#panel').classList.add('hidden'); }
+    tall = 'cards';
+    if (mode !== 'arena') api.setLayout('arena');
+    if (window.CardTable) CardTable.reset();
+    setTimeout(renderTable, 0);
+    syncCards();
+  }
+  function hideTable() {
+    const v = $('#cards-view'); if (v) v.remove();
+    if (tall === 'cards') { tall = null; if (mode === 'arena') api.setLayout('bar'); }
+    syncCards();
+  }
+  function renderTable() {
+    if (tall !== 'cards' || !window.CardTable) return;
+    if (!L || !L.table) { hideTable(); return; }
+    let v = $('#cards-view');
+    if (!v) { v = document.createElement('div'); v.id = 'cards-view'; $('#garden').appendChild(v); CardTable.reset(); }
+    CardTable.render(v, { L, esc, Sound, toast, lanAct, needConfirm, minimize: hideTable, rerender: renderTable });
+  }
+  function syncCards() {
+    if (!L || L.mode !== 'group') return;
+    const T = L.table;
+    if (T && T.id !== tableOpened) { tableOpened = T.id; showTable(); return; }
+    if (!T) tableOpened = null;
+    if (tall === 'cards') renderTable();
+    let back = $('#cards-back');
+    if (T && tall !== 'cards' && !tall && mode === 'bar') {
+      if (!back) { back = document.createElement('button'); back.id = 'cards-back'; back.onclick = showTable; $('#garden').appendChild(back); }
+      const myTurn = T.status === 'playing' && T.pub && T.pub.turn === T.seat;
+      back.textContent = myTurn ? '🃏 Tới lượt bạn!' : '🃏 Bàn bài';
+      back.classList.toggle('hot', myTurn);
+    } else if (back) back.remove();
+    // lời mời vào bàn
+    const inv = (L.rooms || []).find((r) => r.invited && !r.mine && r.status === 'waiting' && !dismissedInv.has(r.id));
+    let bn = $('#card-invite');
+    if (inv && !T) {
+      if (!bn) { bn = document.createElement('div'); bn.id = 'card-invite'; $('#garden').appendChild(bn); Sound.play('bloom'); }
+      if (bn.dataset.id !== inv.id) {
+        bn.dataset.id = inv.id; bn.innerHTML = '';
+        const host = inv.seats.find((x) => x.id === inv.host);
+        const t = document.createElement('span'); t.textContent = `🃏 ${host ? host.name : 'Bạn'} mời chơi ${inv.game === 'phom' ? 'Phỏm' : 'Tiến lên'} (${inv.stake} xu/ván)`;
+        const yes = document.createElement('button'); yes.className = 'primary'; yes.textContent = 'Vào bàn';
+        yes.onclick = () => { bn.remove(); lanAct({ type: 'cardJoin', room: inv.id }, true); };
+        const no = document.createElement('button'); no.textContent = 'Bỏ qua';
+        no.onclick = () => { dismissedInv.add(inv.id); bn.remove(); };
+        bn.append(t, yes, no);
+      }
+    } else if (bn) bn.remove();
+    const lobbySig = JSON.stringify([L.rooms, !!T, (L.players || []).map((p) => [p.id, p.status])]);
+    const typing = document.activeElement && document.activeElement.closest('#panel .card-form');
+    if (panel === 'cards' && lobbySig !== syncCards.sig && !typing) { syncCards.sig = lobbySig; renderPanel(); }
+  }
+  let cardForm = { game: 'tienlen', stake: 50, invite: new Set() };
+  function renderCardsLobby(body) {
+    if (!L || L.mode !== 'group' || !L.role) { body.innerHTML = '<div class="note">Bàn bài chơi với người trong nhóm – hãy vào nhóm ở 🌐 Bạn bè & chat.</div>'; return; }
+    const note = document.createElement('div'); note.className = 'note';
+    note.textContent = 'Chơi với người trong nhóm, ăn xu thật. 2–4 người/bàn, mỗi lượt 20 giây (hết giờ tự đánh hộ). Mỗi ván giữ cọc 12 × mức cược, hết ván trả lại cọc ± tiền thắng thua.';
+    body.appendChild(note);
+    const rooms = L.rooms || [];
+    const t1 = document.createElement('div'); t1.className = 'section-title'; t1.textContent = rooms.length ? 'Bàn đang mở' : 'Chưa có bàn nào – mở bàn mới bên dưới'; body.appendChild(t1);
+    const g = grid(body);
+    for (const r of rooms) {
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = r.game === 'phom' ? '🀄' : '🂡'; pic.style.setProperty('--c', '#52b788');
+      const host = r.seats.find((x) => x.id === r.host);
+      g.appendChild(card({ pic, title: `${r.game === 'phom' ? 'Phỏm' : 'Tiến lên miền Nam'} · ${r.stake} xu`, lines: [
+        `Chủ bàn: <b>${esc(host ? host.name : '?')}</b> · ${r.seats.length}/4 người`, esc(r.seats.map((x) => x.name).join(', ')),
+        r.status === 'waiting' ? 'Đang chờ' : 'Đang chơi'],
+      buttons: [r.mine ? { label: '🃏 Xem bàn', primary: true, onClick: () => { tableOpened = null; showTable(); } }
+        : { label: 'Vào bàn', primary: true, disabled: r.status !== 'waiting' || r.seats.length >= 4 || !!L.table, onClick: () => lanAct({ type: 'cardJoin', room: r.id }, true) }] }));
+    }
+    const t2 = document.createElement('div'); t2.className = 'section-title'; t2.textContent = 'Mở bàn mới'; body.appendChild(t2);
+    const f = document.createElement('div'); f.className = 'admin-row card-form';
+    f.innerHTML = `<select class="cf-game"><option value="tienlen">🂡 Tiến lên miền Nam</option><option value="phom">🀄 Phỏm (tá lả)</option></select>
+      Cược <input type="number" class="cf-stake" min="10" max="500" step="10" value="${cardForm.stake}" style="width:70px"/> xu/ván
+      <span class="cf-dep"></span>`;
+    f.querySelector('.cf-game').value = cardForm.game;
+    const dep = f.querySelector('.cf-dep');
+    const upd = () => { cardForm.stake = Math.round(Number(f.querySelector('.cf-stake').value) || 0); dep.textContent = `(cần ≥ ${(cardForm.stake * 12).toLocaleString('vi-VN')} xu để giữ cọc)`; };
+    f.querySelector('.cf-game').onchange = (e) => { cardForm.game = e.target.value; };
+    f.querySelector('.cf-stake').oninput = upd; upd();
+    body.appendChild(f);
+    const others = (L.players || []).filter((p) => p.id !== L.selfId);
+    if (others.length) {
+      const inv = document.createElement('div'); inv.className = 'admin-row'; inv.append('Mời: ');
+      for (const p of others) {
+        const lb = document.createElement('label'); lb.className = 'cf-inv';
+        lb.innerHTML = `<input type="checkbox" ${cardForm.invite.has(p.id) ? 'checked' : ''}/> ${esc(p.name)} <small>${esc(p.status)}</small>`;
+        lb.querySelector('input').onchange = (e) => { if (e.target.checked) cardForm.invite.add(p.id); else cardForm.invite.delete(p.id); };
+        inv.appendChild(lb);
+      }
+      body.appendChild(inv);
+    }
+    const go = document.createElement('button'); go.className = 'primary'; go.textContent = '🃏 Mở bàn'; go.style.marginTop = '6px';
+    go.disabled = !!L.table;
+    go.onclick = async () => {
+      const r = await lanAct({ type: 'cardCreate', game: cardForm.game, stake: cardForm.stake, invite: [...cardForm.invite] }, true);
+      if (r.ok) { cardForm.invite = new Set(); tableOpened = null; }
+    };
+    body.appendChild(go);
+  }
   async function openTree() {
     if (!L || L.mode !== 'group' || !L.role) { toast('Thần mộc là cây chung của nhóm – hãy vào nhóm ở 🌐 Bạn bè & chat.', true); return; }
     treeData = null; openPanel('tree');
@@ -787,6 +896,13 @@
       g.appendChild(card({ pic, title: 'Thần mộc (cả nhóm)', lines: ['Cả nhóm cùng nuôi 1 cây: mỗi ngày tưới 1 lần và góp phân bón. Cây tới mốc nào, ai đã góp sức nhận rương mốc đó.',
         t ? `Mùa ${t.season}: ${t.growth}/${t.max} điểm${t.claimable ? ` · <b>🎁 ${t.claimable} rương chờ nhận</b>` : ''}${t.watered ? '' : ' · <b>chưa tưới hôm nay</b>'}` : ''],
         buttons: [{ label: '🌳 Tới Thần mộc', primary: true, onClick: openTree }] }));
+    }
+    if (L && L.mode === 'group' && L.role) {
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = '🂡'; pic.style.setProperty('--c', '#52b788');
+      const open = (L.rooms || []).filter((r) => r.status === 'waiting').length;
+      g.appendChild(card({ pic, title: 'Tiến lên & Phỏm (nhiều người)', lines: ['Mở bàn mời người trong nhóm chơi Tiến lên miền Nam hoặc Phỏm, ăn xu thật. 2–4 người, mỗi lượt 20 giây.',
+        open ? `<b>${open} bàn đang chờ người</b>` : 'Chưa có bàn nào đang chờ'],
+      buttons: [{ label: '🃏 Vào sảnh bài', primary: true, onClick: () => openPanel('cards') }] }));
     }
     for (const [id, icon, name, desc, reward] of list) {
       const st = mg[id] || { left: 0, limit: 0, best: 0 };
@@ -1006,7 +1122,7 @@
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
     bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực'], ['fish', 'Cá']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin (chỉ máy của bạn)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', cards: '🃏 Sảnh bài – Tiến lên & Phỏm', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin (chỉ máy của bạn)' };
 
   function renderPanel() {
     if (!panel) return;
@@ -1034,7 +1150,7 @@
     const ch = body.querySelector('.lan-chat-history');
     chatScroll = ch ? { top: ch.scrollTop, atBottom: ch.scrollHeight - ch.scrollTop - ch.clientHeight < 12 } : null;
     body.innerHTML = '';
-    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan, games: renderGames,
+    ({ shop: renderShop, bag: renderBag, wiki: renderWiki, log: renderLog, settings: renderSettings, detail: renderDetail, admin: renderAdmin, notify: renderNotify, gift: renderGift, house: renderHousePanel, wheel: renderWheel, lan: renderLan, games: renderGames, cards: renderCardsLobby,
       tree: (b) => GroupTree.render(b, { tree: treeData, CAT, V, run: treeAct }) }[panel])(body);
     body.scrollTop = scroll;
   }
@@ -1591,8 +1707,9 @@
     if (!sel) return;
     const h = document.createElement('div'); h.className = 'section-title'; h.textContent = `Thao tác với ${nameOf(sel)}`; body.appendChild(h);
     const row = document.createElement('div'); row.className = 'admin-row';
-    const quick = [['+1.000 xu', { op: 'money', amount: 1000 }], ['+10.000 xu', { op: 'money', amount: 10000 }], ['+500 EXP', { op: 'exp', amount: 500 }],
-      ['+1 cấp', { op: 'level', amount: 1 }], ['Đặt lại lượt mini game', { op: 'resetGames' }], ['Cho mở quà lại', { op: 'resetDaily' }],
+    const quick = [['+1.000 xu', { op: 'money', amount: 1000 }], ['+10.000 xu', { op: 'money', amount: 10000 }],
+      ['−1.000 xu', { op: 'money', amount: -1000 }], ['−10.000 xu', { op: 'money', amount: -10000 }], ['Trừ hết xu', { op: 'money', amount: -Math.max(0, Number(sel.money) || 0) }],
+      ['+500 EXP', { op: 'exp', amount: 500 }], ['−500 EXP', { op: 'exp', amount: -500 }], ['+1 cấp', { op: 'level', amount: 1 }], ['−1 cấp', { op: 'level', amount: -1 }], ['Đặt lại lượt mini game', { op: 'resetGames' }], ['Cho mở quà lại', { op: 'resetDaily' }],
       ['+1 lượt quay free', { op: 'freeSpin' }], ['+10 phân bón', { op: 'fert' }], ['+5 hạt mỗi giống', { op: 'seeds' }]];
     for (const [label, a] of quick) {
       const b = document.createElement('button'); b.textContent = label;
@@ -1601,11 +1718,16 @@
     }
     body.appendChild(row);
     const row2 = document.createElement('div'); row2.className = 'admin-row'; row2.style.marginTop = '6px';
-    row2.innerHTML = 'Xu <input type="number" class="acc-money" value="1000" style="width:90px"/> <button class="acc-money-btn">Cộng/trừ</button>'
-      + ' &nbsp; EXP <input type="number" class="acc-exp" value="200" style="width:80px"/> <button class="acc-exp-btn">Cộng/trừ</button>'
+    row2.innerHTML = 'Xu <input type="number" class="acc-money" value="1000" min="0" style="width:90px"/> <button class="acc-money-btn">Cộng</button> <button class="acc-money-sub">Trừ</button>'
+      + ' &nbsp; EXP <input type="number" class="acc-exp" value="200" min="0" style="width:80px"/> <button class="acc-exp-btn">Cộng</button> <button class="acc-exp-sub">Trừ</button>'
       + ' &nbsp; <button class="acc-reset" style="background:#ffd6d6">Xoá vườn – chơi lại từ đầu</button>';
     row2.querySelector('.acc-money-btn').onclick = () => runOnAccount({ type: 'admin', op: 'money', amount: Number(row2.querySelector('.acc-money').value) });
     row2.querySelector('.acc-exp-btn').onclick = () => runOnAccount({ type: 'admin', op: 'exp', amount: Number(row2.querySelector('.acc-exp').value) });
+    const abs = (q) => Math.abs(Number(row2.querySelector(q).value) || 0);
+    row2.querySelector('.acc-money-sub').onclick = () => runOnAccount({ type: 'admin', op: 'money', amount: -abs('.acc-money') });
+    row2.querySelector('.acc-exp-sub').onclick = () => runOnAccount({ type: 'admin', op: 'exp', amount: -abs('.acc-exp') });
+    row2.querySelector('.acc-money-btn').onclick = () => runOnAccount({ type: 'admin', op: 'money', amount: abs('.acc-money') });
+    row2.querySelector('.acc-exp-btn').onclick = () => runOnAccount({ type: 'admin', op: 'exp', amount: abs('.acc-exp') });
     row2.querySelector('.acc-reset').onclick = () => {
       if (!needConfirm(`acc-reset-${sel.id}`, `Bấm lần nữa để XOÁ vườn của ${nameOf(sel)} (giữ Cài đặt).`)) runOnAccount({ type: 'adminReset' });
     };
@@ -1806,6 +1928,7 @@
     L = v;
     if (panel === 'lan') { renderPanel(); refreshChatOnly(); }
     syncArena();
+    syncCards();
     if (visiting) { if (!L.role) visiting = null; renderVisitBanner(); renderSlots(); renderHouse(); renderScene(); }
   });
   api.onLayout(({ mode: m, position }) => {
@@ -1813,7 +1936,8 @@
     document.body.classList.toggle('pos-bottom', position !== 'top');
     setMode(m);
     if (m === 'panel' && panel) { $('#panel').classList.remove('hidden'); renderPanel(); }
-    if (m === 'arena' && tall !== 'game') { arenaShown = true; renderArena(); syncArena(); } else syncArena();
+    if (m === 'arena' && tall !== 'game' && tall !== 'cards') { arenaShown = true; renderArena(); syncArena(); } else syncArena();
+    syncCards();
   });
 
   $('#collapse').onclick = () => { panel = null; api.setLayout('collapsed'); };
@@ -1837,7 +1961,7 @@
   });
   $('#music-btn').onclick = () => act({ type: 'settings', patch: { music: !V.settings.music } });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { if (panel) closePanel(); else if (arenaShown) hideArena(); else api.setLayout('collapsed'); }
+    if (e.key === 'Escape') { if (panel) closePanel(); else if (tall === 'cards') hideTable(); else if (arenaShown) hideArena(); else api.setLayout('collapsed'); }
     const n = Number(e.key);
     if (!e.target.closest('input') && n >= 1 && n <= TOOLS.length) { tool = TOOLS[n - 1].id; renderHud(); }
   });

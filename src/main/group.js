@@ -8,6 +8,10 @@
 // - Phần còn lại (chat, ai đang online, xem vườn, trả lời đấu trường) gọi thẳng RPC vp_poll/vp_send_chat/vp_duel_*.
 const crypto = require('node:crypto');
 const { PROTOCOL } = require('../core/actions');
+const PH = require('../core/cards/phom');
+
+const TABLE_MS = 1000; // xem bàn bài 1 giây/lần khi đang ngồi bàn
+const CARD_TYPES = new Set(['cardCreate', 'cardJoin', 'cardLeave', 'cardInvite', 'cardStart', 'cardMove']);
 const { safeGarden } = require('./lan');
 
 const SYNC_MS = 3000;
@@ -59,6 +63,7 @@ class GroupRoom {
     this.applyServer = applyServer || (() => {}); // nhận state mới từ máy chủ trò chơi
     this.duels = []; this.duel = null; this.duelTimer = null; this.duelBusy = false;
     this.tree = null; // tóm tắt Thần mộc (từ vp_sync)
+    this.rooms = []; this.table = null; this.tableTimer = null; this.tableId = null; this.tickAsked = 0; this.resultSeen = 0;
     this.config = { alias: 'Người chơi', friends: [], group: null, auth: null, ...config };
     this.saveConfig = saveConfig;
     this.changed = changed;
@@ -85,7 +90,8 @@ class GroupRoom {
     return { mode: 'group', online: this.configured, role: this.inGroup ? 'member' : null, selfId: uid || null,
       groupCode: this.inGroup ? this.config.group.code : '', away: this.away, alias: this.config.alias,
       joined: false, players, friends: this.config.friends, messages: this.messages.slice(-100), error: this.error,
-      duels: this.duels, duel: this.duel, tree: this.inGroup ? this.tree : null };
+      duels: this.duels, duel: this.duel, tree: this.inGroup ? this.tree : null,
+      rooms: this.inGroup ? this.rooms : [], table: this.inGroup ? this.table : null };
   }
 
   emit() { this.changed(this.status()); }
@@ -384,6 +390,78 @@ class GroupRoom {
     } finally { this.duelBusy = false; this.emit(); }
   }
 
+  // ------------------------------------------------------------ bàn bài (Tiến lên, Phỏm)
+  async cardAction(a) {
+    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
+    if (!a || !CARD_TYPES.has(a.type)) throw new Error('Hành động bàn bài không hợp lệ.');
+    const r = await this.server({ ...a, room: a.room || this.tableId || undefined });
+    if (r.ok && r.room && a.type !== 'cardLeave') this.openTable(r.room);
+    if (a.type === 'cardLeave' && r.ok) { await this.refreshTable().catch(() => {}); if (this.table && this.table.status === 'waiting') this.closeTable(); }
+    else await this.refreshTable().catch(() => {});
+    this.syncNow().catch(() => {});
+    return { ok: !!r.ok, msg: cleanText(r.msg) };
+  }
+
+  openTable(id) {
+    if (!UUID.test(String(id))) return;
+    if (this.tableId !== id) { this.tableId = id; this.table = null; this.resultSeen = 0; }
+    if (!this.tableTimer) this.tableLoop();
+    this.refreshTable().catch(() => {});
+  }
+
+  closeTable() {
+    clearTimeout(this.tableTimer); this.tableTimer = null;
+    this.tableId = null; this.table = null;
+    this.emit();
+    return { ok: true };
+  }
+
+  tableLoop() {
+    this.tableTimer = setTimeout(async () => {
+      this.tableTimer = null;
+      if (!this.tableId) return;
+      try { await this.refreshTable(); } catch (_) { /* thử lại */ }
+      if (this.tableId) this.tableLoop();
+    }, TABLE_MS);
+  }
+
+  async refreshTable() {
+    const id = this.tableId;
+    if (!id) return;
+    const v = await this.rpc('vp_card_view', { p_room: id });
+    if (this.tableId !== id) return;
+    if (!v) { this.closeTable(); return; }
+    const skew = Number(v.now) - this.now();
+    const pub = v.pub && typeof v.pub === 'object' ? v.pub : null;
+    const cards = Array.isArray(v.cards) ? v.cards.filter((c) => Number.isInteger(c) && c >= 0 && c < 52) : [];
+    const seat = Number.isInteger(v.seat) ? v.seat : -1;
+    const t = { id: v.id, game: v.game === 'phom' ? 'phom' : 'tienlen', stake: Number(v.stake) || 0, host: v.host, status: String(v.status),
+      hand: Number(v.hand) || 0, seats: (Array.isArray(v.seats) ? v.seats : []).slice(0, 4).map((p) => ({ id: p.id, name: cleanName(p.name), away: !!p.away })),
+      invited: Array.isArray(v.invited) ? v.invited : [], seat, cards, pub, result: v.result || null, skew,
+      deposit: (Number(v.stake) || 0) * 12, me: this.config.auth && this.config.auth.uid };
+    if (t.game === 'phom' && pub && seat >= 0 && t.status === 'playing') {
+      const hands = []; hands[seat] = cards;
+      const g = { pub, hands };
+      try {
+        t.canEat = PH.canEat(g, seat);
+        t.suggest = pub.turn === seat && pub.phase === 'discard' ? PH.suggestDiscard(g, seat) : null;
+      } catch (_) { t.canEat = false; t.suggest = null; }
+    }
+    this.table = t;
+    // hết giờ mà máy chủ chưa đánh hộ → nhắc máy chủ (ai đang xem bàn cũng nhắc được)
+    if (t.status === 'playing' && pub && pub.deadline && this.now() + skew > pub.deadline + 700 && this.tickAsked !== pub.deadline) {
+      this.tickAsked = pub.deadline;
+      this.server({ type: 'cardTick', room: id }).catch(() => {});
+    }
+    if (t.status === 'settling' && this.tickAsked !== -t.hand) { this.tickAsked = -t.hand; this.server({ type: 'cardTick', room: id }).catch(() => {}); }
+    // vừa xong 1 ván: lấy lại vườn của mình để thấy xu mới
+    if (t.result && t.status === 'waiting' && t.result.hand > this.resultSeen) {
+      this.resultSeen = t.result.hand;
+      this.game({ a: { type: 'tick' } }).catch(() => {});
+    }
+    this.emit();
+  }
+
   // ------------------------------------------------------------ đồng bộ định kỳ
   start() {
     if (!this.configured || !this.inGroup) return;
@@ -436,6 +514,12 @@ class GroupRoom {
       .map((d) => ({ id: d.id, status: String(d.status), a: d.a, b: d.b, aName: cleanName(d.aName), bName: cleanName(d.bName),
         winner: d.winner || null, picked: !!d.picked }));
     this.watchDuels();
+    this.rooms = (Array.isArray(r && r.cards) ? r.cards : []).filter((x) => x && UUID.test(x.id)).slice(0, 20)
+      .map((x) => ({ id: x.id, game: x.game === 'phom' ? 'phom' : 'tienlen', stake: Number(x.stake) || 0, status: String(x.status), host: x.host,
+        seats: (Array.isArray(x.seats) ? x.seats : []).slice(0, 4).map((p) => ({ id: p.id, name: cleanName(p.name) })), invited: !!x.invited, mine: !!x.mine }));
+    const mine = this.rooms.find((x) => x.mine);
+    if (mine && this.tableId !== mine.id) this.openTable(mine.id);
+    if (!mine && this.tableId && !(this.table && this.table.result)) this.closeTable();
     const t = r && r.tree;
     this.tree = t ? { season: Number(t.season) || 1, growth: Number(t.growth) || 0, max: Number(t.max) || 1, watered: !!t.watered, claimable: Number(t.claimable) || 0 } : null;
     this.emit();

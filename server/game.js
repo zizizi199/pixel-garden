@@ -14,6 +14,7 @@ const C = require('../src/core/catalog');
 const A = require('../src/core/actions');
 const CL = require('../src/core/clock');
 const { groupGarden } = require('../src/core/snapshot');
+const { createCards, CARD_TYPES } = require('./cards');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ADMIN_WINDOW_MS = 2 * 60 * 1000;
@@ -269,6 +270,16 @@ function createHandler({ url, serviceKey, adminPublicKey, fetch = globalThis.fet
     return self ? reply(m, { r: m.out.r }) : { ok: true, r: m.out.r };
   }
 
+  /** state + mini game của chính người gọi (không ghi) – gửi kèm khi xu thay đổi ở bàn bài. */
+  async function snapshot(uid) {
+    const rec = await load(uid);
+    if (!rec) return null;
+    const { state, t } = prepare(rec, {});
+    return { state: publicState(state), mg: MG.info(state, t) };
+  }
+  const newId = () => (globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (c ^ (Math.random() * 16 >> (c / 4))).toString(16)));
+  const cards = createCards({ rpc, mutate, snapshot, now, rng, newId });
+
   const GROUP_TYPES = new Set(['visit', 'treeWater', 'treeFert', 'treeClaim', 'treeClaimTop', 'duelInvite', 'duelRespond', 'duelSettle']);
 
   async function handle(body, uid) {
@@ -289,6 +300,12 @@ function createHandler({ url, serviceKey, adminPublicKey, fetch = globalThis.fet
     if (!a || typeof a !== 'object' || typeof a.type !== 'string') throw new HttpError(400, 'Hành động không hợp lệ.');
     if (A.ADMIN_TYPES.has(a.type) && !isAdmin) return { ok: true, r: { ok: false, msg: 'Admin đã tắt.' } };
     if (a.type === 'adminList' || a.type === 'adminUser') return adminAccounts(uid, a, ctx);
+    if (CARD_TYPES.has(a.type)) {
+      const out = await cards.act(uid, a, ctx);
+      if (out.own) { out.state = out.own.state; out.mg = out.own.mg; }
+      delete out.own;
+      return out;
+    }
     if (a.type === 'tick') return tick(uid, ctx);
     if (GROUP_TYPES.has(a.type)) return groupAction(uid, a, ctx);
     return gameAction(uid, a, ctx, isAdmin);
