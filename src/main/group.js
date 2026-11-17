@@ -9,6 +9,8 @@
 const crypto = require('node:crypto');
 const { PROTOCOL } = require('../core/actions');
 const PH = require('../core/cards/phom');
+const PK = require('../core/cards/poker');
+const GAME_ID = (g) => (['tienlen', 'phom', 'poker'].includes(g) ? g : 'tienlen');
 
 const TABLE_MS = 1000; // xem bàn bài 1 giây/lần khi đang ngồi bàn
 const CARD_TYPES = new Set(['cardCreate', 'cardJoin', 'cardLeave', 'cardInvite', 'cardStart', 'cardMove']);
@@ -435,17 +437,24 @@ class GroupRoom {
     const pub = v.pub && typeof v.pub === 'object' ? v.pub : null;
     const cards = Array.isArray(v.cards) ? v.cards.filter((c) => Number.isInteger(c) && c >= 0 && c < 52) : [];
     const seat = Number.isInteger(v.seat) ? v.seat : -1;
-    const t = { id: v.id, game: v.game === 'phom' ? 'phom' : 'tienlen', stake: Number(v.stake) || 0, host: v.host, status: String(v.status),
-      hand: Number(v.hand) || 0, seats: (Array.isArray(v.seats) ? v.seats : []).slice(0, 4).map((p) => ({ id: p.id, name: cleanName(p.name), away: !!p.away })),
+    const t = { id: v.id, game: GAME_ID(v.game), stake: Number(v.stake) || 0, host: v.host, status: String(v.status),
+      hand: Number(v.hand) || 0, seats: (Array.isArray(v.seats) ? v.seats : []).slice(0, 6).map((p) => ({ id: p.id, name: cleanName(p.name), away: !!p.away })),
       invited: Array.isArray(v.invited) ? v.invited : [], seat, cards, pub, result: v.result || null, skew,
-      deposit: (Number(v.stake) || 0) * 12, me: this.config.auth && this.config.auth.uid };
+      deposit: Number(v.deposit) || (Number(v.stake) || 0) * 12, me: this.config.auth && this.config.auth.uid };
     if (t.game === 'phom' && pub && seat >= 0 && t.status === 'playing') {
       const hands = []; hands[seat] = cards;
       const g = { pub, hands };
       try {
         t.canEat = PH.canEat(g, seat);
         t.suggest = pub.turn === seat && pub.phase === 'discard' ? PH.suggestDiscard(g, seat) : null;
-      } catch (_) { t.canEat = false; t.suggest = null; }
+        const b = PH.best(cards, Array.isArray(pub.eaten && pub.eaten[seat]) ? pub.eaten[seat] : []);
+        t.melds = b ? b.melds : []; // phỏm đang có trên tay (để tô màu, xếp bài)
+        t.points = b ? b.points : null;
+      } catch (_) { t.canEat = false; t.suggest = null; t.melds = []; }
+    }
+    if (t.game === 'poker' && pub && seat >= 0 && cards.length === 2) {
+      const bh = PK.bestHand([...cards, ...(Array.isArray(pub.board) ? pub.board : [])]);
+      t.handName = bh && (pub.board || []).length ? bh.name : null;
     }
     this.table = t;
     // hết giờ mà máy chủ chưa đánh hộ → nhắc máy chủ (ai đang xem bàn cũng nhắc được)
@@ -515,8 +524,8 @@ class GroupRoom {
         winner: d.winner || null, picked: !!d.picked }));
     this.watchDuels();
     this.rooms = (Array.isArray(r && r.cards) ? r.cards : []).filter((x) => x && UUID.test(x.id)).slice(0, 20)
-      .map((x) => ({ id: x.id, game: x.game === 'phom' ? 'phom' : 'tienlen', stake: Number(x.stake) || 0, status: String(x.status), host: x.host,
-        seats: (Array.isArray(x.seats) ? x.seats : []).slice(0, 4).map((p) => ({ id: p.id, name: cleanName(p.name) })), invited: !!x.invited, mine: !!x.mine }));
+      .map((x) => ({ id: x.id, game: GAME_ID(x.game), stake: Number(x.stake) || 0, status: String(x.status), host: x.host,
+        seats: (Array.isArray(x.seats) ? x.seats : []).slice(0, 6).map((p) => ({ id: p.id, name: cleanName(p.name) })), invited: !!x.invited, mine: !!x.mine }));
     const mine = this.rooms.find((x) => x.mine);
     if (mine && this.tableId !== mine.id) this.openTable(mine.id);
     if (!mine && this.tableId && !(this.table && this.table.result)) this.closeTable();

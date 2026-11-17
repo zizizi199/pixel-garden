@@ -12,10 +12,11 @@ const fail = (msg) => ({ ok: true, r: { ok: false, msg } });
 function cleanMove(m) {
   if (!m || typeof m !== 'object') return null;
   const kind = String(m.kind || '');
-  if (!['play', 'pass', 'draw', 'eat', 'discard'].includes(kind)) return null;
+  if (!['play', 'pass', 'draw', 'eat', 'discard', 'fold', 'check', 'call', 'raise', 'allin'].includes(kind)) return null;
   const out = { kind };
   if (kind === 'play') out.cards = Array.isArray(m.cards) ? m.cards.slice(0, 13).map(Number) : [];
   if (kind === 'discard') out.card = Number(m.card);
+  if (kind === 'raise') out.to = Math.round(Number(m.to) || 0);
   return out;
 }
 
@@ -111,7 +112,7 @@ function createCards({ rpc, mutate, snapshot, now, rng, newId }) {
         if (room0.host !== uid) return fail('Chỉ chủ bàn mới bắt đầu được.');
         if (room0.status !== 'waiting') return fail('Ván đang chơi.');
         if (room0.seats.length < R.GAMES[room0.game].min) return fail('Cần ít nhất 2 người.');
-        const amount = room0.stake * R.DEPOSIT;
+        const amount = R.depositOf(room0);
         const nonce = Math.floor(rng() * 1e9).toString(36);
         const ids = room0.seats.map((s) => s.id);
         const hand = room0.hand + 1;
@@ -120,7 +121,7 @@ function createCards({ rpc, mutate, snapshot, now, rng, newId }) {
           if (await pay(s.id, `${a.room}:${hand}:${nonce}:in`, -amount, null)) done.push(s.id); else { short = s.name; break; }
         }
         const refund = async () => { for (const id of done) await pay(id, `${a.room}:${hand}:${nonce}:refund`, amount, null).catch(() => {}); };
-        if (short) { await refund(); return fail(`${short} không đủ ${amount} xu để giữ cọc (${R.DEPOSIT} × mức cược).`); }
+        if (short) { await refund(); return fail(`${short} không đủ ${amount} xu để giữ cọc (${R.GAMES[room0.game].deposit} × mức cược).`); }
         const out = await withRoom(a.room, (room) => {
           if (room.status !== 'waiting' || room.seats.map((s) => s.id).join() !== ids.join()) return { ok: false, msg: 'Bàn vừa thay đổi, bấm Bắt đầu lại.', noSave: true };
           room.escrow = { nonce, amount, ids };

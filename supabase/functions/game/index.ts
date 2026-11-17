@@ -3707,6 +3707,282 @@ var require_phom = __commonJS({
   }
 });
 
+// src/core/cards/poker.js
+var require_poker = __commonJS({
+  "src/core/cards/poker.js"(exports, module) {
+    "use strict";
+    var STACK = 40;
+    var HAND_NAMES = ["M\u1EADu th\u1EA7u", "\u0110\xF4i", "Th\xFA (2 \u0111\xF4i)", "S\xE1m c\xF4", "S\u1EA3nh", "Th\xF9ng", "C\xF9 l\u0169", "T\u1EE9 qu\xFD", "Th\xF9ng ph\xE1 s\u1EA3nh"];
+    var pv = (c) => {
+      const r = c >> 2;
+      return r === 12 ? 0 : r + 1;
+    };
+    var suit = (c) => c & 3;
+    function eval5(cs) {
+      const vals = cs.map(pv).sort((a, b) => b - a);
+      const flush = cs.every((c) => suit(c) === suit(cs[0]));
+      const uniq = [...new Set(vals)];
+      let straightTop = -1;
+      if (uniq.length === 5) {
+        if (vals[0] - vals[4] === 4) straightTop = vals[0];
+        else if (vals[0] === 12 && vals[1] === 3) straightTop = 3;
+      }
+      const cnt = {};
+      vals.forEach((v) => {
+        cnt[v] = (cnt[v] || 0) + 1;
+      });
+      const groups = Object.entries(cnt).map(([v, n]) => [n, Number(v)]).sort((a, b) => b[0] - a[0] || b[1] - a[1]);
+      const byGroup = groups.map((g) => g[1]);
+      if (straightTop >= 0 && flush) return [8, straightTop];
+      if (groups[0][0] === 4) return [7, ...byGroup];
+      if (groups[0][0] === 3 && groups[1][0] === 2) return [6, ...byGroup];
+      if (flush) return [5, ...vals];
+      if (straightTop >= 0) return [4, straightTop];
+      if (groups[0][0] === 3) return [3, ...byGroup];
+      if (groups[0][0] === 2 && groups[1][0] === 2) return [2, ...byGroup];
+      if (groups[0][0] === 2) return [1, ...byGroup];
+      return [0, ...vals];
+    }
+    var cmp = (a, b) => {
+      for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const d = (a[i] || 0) - (b[i] || 0);
+        if (d) return d;
+      }
+      return 0;
+    };
+    function bestHand(cards) {
+      let best = null;
+      const n = cards.length;
+      for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) for (let c = b + 1; c < n; c++) for (let d = c + 1; d < n; d++) for (let e = d + 1; e < n; e++) {
+        const five = [cards[a], cards[b], cards[c], cards[d], cards[e]];
+        const s = eval5(five);
+        if (!best || cmp(s, best.score) > 0) best = { score: s, cards: five };
+      }
+      if (!best) return null;
+      best.name = HAND_NAMES[best.score[0]];
+      return best;
+    }
+    function pushEvent(pub, ev) {
+      pub.eventId += 1;
+      pub.events.push({ id: pub.eventId, ...ev });
+      if (pub.events.length > 40) pub.events.splice(0, pub.events.length - 40);
+    }
+    var live = (pub, s) => !pub.folded[s];
+    var canAct = (pub, s) => !pub.folded[s] && !pub.allin[s];
+    var nextFrom = (pub, from, ok) => {
+      for (let i = 1; i <= pub.n; i++) {
+        const s = (from + i) % pub.n;
+        if (ok(s)) return s;
+      }
+      return -1;
+    };
+    function put(pub, s, amount) {
+      const x = Math.max(0, Math.min(amount, pub.stacks[s]));
+      pub.stacks[s] -= x;
+      pub.bets[s] += x;
+      pub.total[s] += x;
+      if (pub.stacks[s] === 0) pub.allin[s] = true;
+      return x;
+    }
+    function deal(n, deck, opts = {}) {
+      const bb = Math.max(2, Math.round(Number(opts.stake) || 10));
+      const sbAmt = Math.floor(bb / 2);
+      const dealer = Number.isInteger(opts.leader) && opts.leader < n ? opts.leader : 0;
+      const hands = Array.from({ length: n }, (_, i) => [deck[i], deck[i + n]].sort((a, b) => a - b));
+      const stock = deck.slice(2 * n);
+      const stack = bb * STACK;
+      const pub = {
+        kind: "poker",
+        n,
+        bb,
+        stage: "preflop",
+        board: [],
+        dealer,
+        stacks: Array(n).fill(stack),
+        start: Array(n).fill(stack),
+        bets: Array(n).fill(0),
+        total: Array(n).fill(0),
+        folded: Array(n).fill(false),
+        allin: Array(n).fill(false),
+        acted: Array(n).fill(false),
+        maxBet: 0,
+        minRaise: bb,
+        turn: 0,
+        pot: 0,
+        events: [],
+        eventId: 0,
+        over: false,
+        places: null,
+        net: null,
+        show: null,
+        winners: null
+      };
+      const sb = n === 2 ? dealer : (dealer + 1) % n;
+      const bbSeat = (sb + 1) % n;
+      pub.sb = sb;
+      pub.bbSeat = bbSeat;
+      put(pub, sb, sbAmt);
+      put(pub, bbSeat, bb);
+      pub.maxBet = bb;
+      pub.pot = pub.total.reduce((a, b) => a + b, 0);
+      pushEvent(pub, { kind: "deal", dealer, sb, bb: bbSeat });
+      pub.turn = nextFrom(pub, bbSeat, (s) => canAct(pub, s));
+      const game = { pub, hands, stock };
+      if (pub.turn < 0 || !needsAction(pub)) runOut(game);
+      return game;
+    }
+    function needsAction(pub) {
+      const actors = Array.from({ length: pub.n }, (_, s) => s).filter((s) => canAct(pub, s));
+      if (Array.from({ length: pub.n }, (_, s) => s).filter((s) => live(pub, s)).length <= 1) return false;
+      if (!actors.length) return false;
+      if (actors.length === 1 && pub.bets[actors[0]] >= pub.maxBet) return false;
+      return actors.some((s) => !pub.acted[s] || pub.bets[s] < pub.maxBet);
+    }
+    function runOut(game) {
+      const { pub } = game;
+      if (Array.from({ length: pub.n }, (_, s) => s).filter((s) => live(pub, s)).length > 1) {
+        while (pub.board.length < 5) nextStreet(game, true);
+      }
+      showdown(game);
+    }
+    function nextStreet(game, silent) {
+      const { pub } = game;
+      pub.bets = Array(pub.n).fill(0);
+      pub.acted = Array(pub.n).fill(false);
+      pub.maxBet = 0;
+      pub.minRaise = pub.bb;
+      const add = pub.board.length === 0 ? 3 : 1;
+      const cards = game.stock.splice(0, add);
+      pub.board.push(...cards);
+      pub.stage = pub.board.length === 3 ? "flop" : pub.board.length === 4 ? "turn" : "river";
+      pushEvent(pub, { kind: "board", stage: pub.stage, cards });
+      if (!silent) pub.turn = nextFrom(pub, pub.dealer, (s) => canAct(pub, s));
+    }
+    function showdown(game) {
+      const { pub, hands } = game;
+      const players = Array.from({ length: pub.n }, (_, s) => s);
+      const alive = players.filter((s) => live(pub, s));
+      const won = Array(pub.n).fill(0);
+      const best = {};
+      if (alive.length > 1) for (const s of alive) best[s] = bestHand([...hands[s], ...pub.board]);
+      const levels = [...new Set(pub.total.filter((x) => x > 0))].sort((a, b) => a - b);
+      let prev = 0;
+      const pots = [];
+      for (const lv of levels) {
+        const amount = players.reduce((sum, s) => sum + Math.max(0, Math.min(pub.total[s], lv) - prev), 0);
+        const elig = alive.filter((s) => pub.total[s] >= lv);
+        prev = lv;
+        if (!amount) continue;
+        if (!elig.length) {
+          pots.push({ amount, elig: alive });
+          continue;
+        }
+        pots.push({ amount, elig });
+      }
+      const order = (s) => (s - pub.dealer - 1 + pub.n) % pub.n;
+      for (const p of pots) {
+        let win = p.elig;
+        if (p.elig.length > 1 && alive.length > 1) {
+          let top = null;
+          for (const s of p.elig) {
+            const sc = best[s].score;
+            if (!top || cmp(sc, top) > 0) {
+              top = sc;
+              win = [s];
+            } else if (cmp(sc, top) === 0) win.push(s);
+          }
+        }
+        win = [...win].sort((a, b) => order(a) - order(b));
+        const each = Math.floor(p.amount / win.length);
+        win.forEach((s, i) => {
+          won[s] += each + (i < p.amount - each * win.length ? 1 : 0);
+        });
+      }
+      players.forEach((s) => {
+        pub.stacks[s] += won[s];
+      });
+      pub.net = players.map((s) => pub.stacks[s] - pub.start[s]);
+      pub.winners = players.filter((s) => won[s] > 0);
+      pub.won = won;
+      pub.places = [...players].sort((a, b) => pub.net[b] - pub.net[a]);
+      pub.show = alive.length > 1 ? Object.fromEntries(alive.map((s) => [s, { cards: hands[s], name: best[s].name, best: best[s].cards }])) : null;
+      pub.stage = "showdown";
+      pub.over = true;
+      pub.pot = 0;
+      pushEvent(pub, { kind: "showdown", winners: pub.winners, won, show: pub.show });
+    }
+    function move(game, seat, mv) {
+      const { pub } = game;
+      if (pub.over) return { ok: false, msg: "V\xE1n \u0111\xE3 k\u1EBFt th\xFAc." };
+      if (seat !== pub.turn) return { ok: false, msg: "Ch\u01B0a t\u1EDBi l\u01B0\u1EE3t b\u1EA1n." };
+      const kind = mv && mv.kind;
+      const toCall = pub.maxBet - pub.bets[seat];
+      if (kind === "fold") {
+        pub.folded[seat] = true;
+        pushEvent(pub, { kind: "fold", seat });
+      } else if (kind === "check") {
+        if (toCall > 0) return { ok: false, msg: `Ph\u1EA3i theo ${toCall} ho\u1EB7c b\u1ECF b\xE0i.` };
+        pushEvent(pub, { kind: "check", seat });
+      } else if (kind === "call") {
+        if (toCall <= 0) return { ok: false, msg: "Kh\xF4ng c\xF3 g\xEC \u0111\u1EC3 theo \u2013 h\xE3y xem (check)." };
+        const x = put(pub, seat, toCall);
+        pushEvent(pub, { kind: pub.allin[seat] ? "allin" : "call", seat, amount: x });
+      } else if (kind === "raise" || kind === "allin") {
+        const maxTo = pub.bets[seat] + pub.stacks[seat];
+        let to = kind === "allin" ? maxTo : Math.round(Number(mv.to) || 0);
+        if (to > maxTo) to = maxTo;
+        if (to <= pub.maxBet) {
+          if (kind === "allin" && to > pub.bets[seat]) {
+            const x = put(pub, seat, to - pub.bets[seat]);
+            pushEvent(pub, { kind: "allin", seat, amount: x });
+          } else return { ok: false, msg: "M\u1EE9c t\u1ED1 ph\u1EA3i cao h\u01A1n m\u1EE9c c\u01B0\u1EE3c hi\u1EC7n t\u1EA1i." };
+        } else {
+          const raise = to - pub.maxBet;
+          if (raise < pub.minRaise && to < maxTo) return { ok: false, msg: `T\u1ED1 \xEDt nh\u1EA5t l\xEAn ${pub.maxBet + pub.minRaise}.` };
+          put(pub, seat, to - pub.bets[seat]);
+          if (raise >= pub.minRaise) {
+            pub.minRaise = raise;
+            pub.acted = pub.acted.map(() => false);
+          }
+          pub.maxBet = to;
+          pushEvent(pub, { kind: pub.allin[seat] ? "allin" : "raise", seat, to });
+        }
+      } else return { ok: false, msg: "N\u01B0\u1EDBc \u0111i kh\xF4ng h\u1EE3p l\u1EC7." };
+      pub.acted[seat] = true;
+      pub.pot = pub.total.reduce((a, b) => a + b, 0);
+      advance(game, seat);
+      return { ok: true };
+    }
+    function advance(game, seat) {
+      const { pub } = game;
+      const alive = Array.from({ length: pub.n }, (_, s) => s).filter((s) => live(pub, s));
+      if (alive.length === 1) {
+        showdown(game);
+        return;
+      }
+      if (needsAction(pub)) {
+        pub.turn = nextFrom(pub, seat, (s) => canAct(pub, s) && (!pub.acted[s] || pub.bets[s] < pub.maxBet));
+        return;
+      }
+      const actors = alive.filter((s) => canAct(pub, s));
+      if (pub.board.length === 5) {
+        showdown(game);
+        return;
+      }
+      if (actors.length <= 1) {
+        runOut(game);
+        return;
+      }
+      nextStreet(game, false);
+    }
+    function autoMove(game, seat) {
+      const { pub } = game;
+      return pub.maxBet - pub.bets[seat] > 0 ? { kind: "fold" } : { kind: "check" };
+    }
+    module.exports = { STACK, HAND_NAMES, eval5, bestHand, deal, move, autoMove, cmp };
+  }
+});
+
 // src/core/cards/room.js
 var require_room = __commonJS({
   "src/core/cards/room.js"(exports, module) {
@@ -3714,9 +3990,11 @@ var require_room = __commonJS({
     var D = require_deck();
     var TL = require_tienlen();
     var PH = require_phom();
+    var PK = require_poker();
     var GAMES = {
-      tienlen: { name: "Ti\u1EBFn l\xEAn mi\u1EC1n Nam", engine: TL, min: 2, max: 4 },
-      phom: { name: "Ph\u1ECFm", engine: PH, min: 2, max: 4 }
+      tienlen: { name: "Ti\u1EBFn l\xEAn mi\u1EC1n Nam", engine: TL, min: 2, max: 4, deposit: 12 },
+      phom: { name: "Ph\u1ECFm", engine: PH, min: 2, max: 4, deposit: 12 },
+      poker: { name: "Poker Texas Hold'em", engine: PK, min: 2, max: 6, deposit: PK.STACK }
     };
     var TURN_MS = 2e4;
     var AWAY_MS = 1500;
@@ -3732,6 +4010,7 @@ var require_room = __commonJS({
         group,
         game: game2,
         stake,
+        deposit: stake * GAMES[game2].deposit,
         host,
         seats: [{ id: host, name: cleanName(name), away: false }],
         invited: [],
@@ -3791,7 +4070,7 @@ var require_room = __commonJS({
       const n = room.seats.length;
       const leader = room.leaderId ? seatOf(room, room.leaderId) : -1;
       const eng = GAMES[room.game].engine;
-      const g = eng.deal(n, D.shuffled(rng), { first: room.hand === 0 || leader < 0, leader: leader < 0 ? 0 : leader });
+      const g = eng.deal(n, D.shuffled(rng), { first: room.hand === 0 || leader < 0, leader: leader < 0 ? 0 : leader, stake: room.stake });
       room.hand += 1;
       room.status = "playing";
       room.pub = g.pub;
@@ -3805,12 +4084,22 @@ var require_room = __commonJS({
     }
     function settle(room) {
       const n = room.seats.length;
+      if (Array.isArray(room.pub.net)) {
+        const lines = (room.pub.winners || []).map((s) => ({
+          from: -1,
+          to: s,
+          units: 0,
+          xu: room.pub.won[s],
+          why: room.pub.show && room.pub.show[s] ? `Th\u1EAFng v\u1EDBi ${room.pub.show[s].name}` : "Th\u1EAFng (m\u1ECDi ng\u01B0\u1EDDi b\u1ECF b\xE0i)"
+        }));
+        return { net: [...room.pub.net], places: room.pub.places, lines };
+      }
       const units = Array(n).fill(0);
       for (const l of room.pub.ledger) {
         units[l.from] -= l.units;
         units[l.to] += l.units;
       }
-      const cap = room.stake * DEPOSIT;
+      const cap = depositOf(room);
       const loss = units.map((u) => u < 0 ? Math.min(cap, -u * room.stake) : 0);
       const paid = loss.reduce((a, b) => a + b, 0);
       const gainUnits = units.reduce((a, u) => a + Math.max(0, u), 0);
@@ -3829,7 +4118,7 @@ var require_room = __commonJS({
     function afterOver(room) {
       room.status = "settling";
       room.result = { hand: room.hand, ...settle(room), names: room.seats.map((s) => s.name), ids: room.seats.map((s) => s.id) };
-      room.leaderId = room.seats[room.pub.places[0]].id;
+      room.leaderId = room.game === "poker" ? room.seats[(room.pub.dealer + 1) % room.seats.length].id : room.seats[room.pub.places[0]].id;
       room.deadline = 0;
       room.pub.deadline = 0;
       return { ok: true, over: true };
@@ -3872,6 +4161,7 @@ var require_room = __commonJS({
       }
       return moves;
     }
+    var depositOf = (room) => room.stake * (GAMES[room.game] || GAMES.tienlen).deposit;
     function viewFor(room, uid, now) {
       const seat = seatOf(room, uid);
       const v = {
@@ -3887,7 +4177,7 @@ var require_room = __commonJS({
         result: room.result,
         seat,
         now,
-        deposit: room.stake * DEPOSIT
+        deposit: depositOf(room)
       };
       v.cards = seat >= 0 && room.hands && room.status === "playing" ? room.hands[seat] : [];
       if (room.game === "phom" && seat >= 0 && room.status === "playing") {
@@ -3896,7 +4186,7 @@ var require_room = __commonJS({
       }
       return v;
     }
-    module.exports = { GAMES, TURN_MS, AWAY_MS, DEPOSIT, STAKE, create, join, leave, invite, startHand, play, tick, settle, settled, viewFor, seatOf };
+    module.exports = { GAMES, TURN_MS, AWAY_MS, DEPOSIT, STAKE, depositOf, create, join, leave, invite, startHand, play, tick, settle, settled, viewFor, seatOf };
   }
 });
 
@@ -3911,10 +4201,11 @@ var require_cards = __commonJS({
     function cleanMove(m) {
       if (!m || typeof m !== "object") return null;
       const kind = String(m.kind || "");
-      if (!["play", "pass", "draw", "eat", "discard"].includes(kind)) return null;
+      if (!["play", "pass", "draw", "eat", "discard", "fold", "check", "call", "raise", "allin"].includes(kind)) return null;
       const out = { kind };
       if (kind === "play") out.cards = Array.isArray(m.cards) ? m.cards.slice(0, 13).map(Number) : [];
       if (kind === "discard") out.card = Number(m.card);
+      if (kind === "raise") out.to = Math.round(Number(m.to) || 0);
       return out;
     }
     function createCards({ rpc, mutate, snapshot, now, rng, newId }) {
@@ -4012,7 +4303,7 @@ var require_cards = __commonJS({
             if (room0.host !== uid) return fail("Ch\u1EC9 ch\u1EE7 b\xE0n m\u1EDBi b\u1EAFt \u0111\u1EA7u \u0111\u01B0\u1EE3c.");
             if (room0.status !== "waiting") return fail("V\xE1n \u0111ang ch\u01A1i.");
             if (room0.seats.length < R.GAMES[room0.game].min) return fail("C\u1EA7n \xEDt nh\u1EA5t 2 ng\u01B0\u1EDDi.");
-            const amount = room0.stake * R.DEPOSIT;
+            const amount = R.depositOf(room0);
             const nonce = Math.floor(rng() * 1e9).toString(36);
             const ids = room0.seats.map((s) => s.id);
             const hand = room0.hand + 1;
@@ -4031,7 +4322,7 @@ var require_cards = __commonJS({
             };
             if (short) {
               await refund();
-              return fail(`${short} kh\xF4ng \u0111\u1EE7 ${amount} xu \u0111\u1EC3 gi\u1EEF c\u1ECDc (${R.DEPOSIT} \xD7 m\u1EE9c c\u01B0\u1EE3c).`);
+              return fail(`${short} kh\xF4ng \u0111\u1EE7 ${amount} xu \u0111\u1EC3 gi\u1EEF c\u1ECDc (${R.GAMES[room0.game].deposit} \xD7 m\u1EE9c c\u01B0\u1EE3c).`);
             }
             const out = await withRoom(a.room, (room) => {
               if (room.status !== "waiting" || room.seats.map((s) => s.id).join() !== ids.join()) return { ok: false, msg: "B\xE0n v\u1EEBa thay \u0111\u1ED5i, b\u1EA5m B\u1EAFt \u0111\u1EA7u l\u1EA1i.", noSave: true };

@@ -9,10 +9,13 @@
 const D = require('./deck');
 const TL = require('./tienlen');
 const PH = require('./phom');
+const PK = require('./poker');
 
+// deposit: cọc mỗi ván = deposit × mức cược (Poker: mang vào 40 big blind)
 const GAMES = {
-  tienlen: { name: 'Tiến lên miền Nam', engine: TL, min: 2, max: 4 },
-  phom: { name: 'Phỏm', engine: PH, min: 2, max: 4 },
+  tienlen: { name: 'Tiến lên miền Nam', engine: TL, min: 2, max: 4, deposit: 12 },
+  phom: { name: 'Phỏm', engine: PH, min: 2, max: 4, deposit: 12 },
+  poker: { name: 'Poker Texas Hold\'em', engine: PK, min: 2, max: 6, deposit: PK.STACK },
 };
 const TURN_MS = 20000;
 const AWAY_MS = 1500;
@@ -24,7 +27,7 @@ function create({ id, group, game, stake, host, name, now }) {
   if (!GAMES[game]) return { ok: false, msg: 'Trò chơi không hợp lệ.' };
   stake = Math.round(Number(stake) || 0);
   if (stake < STAKE.min || stake > STAKE.max) return { ok: false, msg: `Mức cược từ ${STAKE.min} đến ${STAKE.max} xu.` };
-  return { ok: true, room: { id, group, game, stake, host, seats: [{ id: host, name: cleanName(name), away: false }], invited: [], status: 'waiting',
+  return { ok: true, room: { id, group, game, stake, deposit: stake * GAMES[game].deposit, host, seats: [{ id: host, name: cleanName(name), away: false }], invited: [], status: 'waiting',
     hand: 0, leaderId: null, pub: null, hands: null, secret: {}, deadline: 0, result: null, escrow: {}, created: now, updated: now } };
 }
 
@@ -73,7 +76,7 @@ function startHand(room, now, rng = Math.random) {
   const n = room.seats.length;
   const leader = room.leaderId ? seatOf(room, room.leaderId) : -1;
   const eng = GAMES[room.game].engine;
-  const g = eng.deal(n, D.shuffled(rng), { first: room.hand === 0 || leader < 0, leader: leader < 0 ? 0 : leader });
+  const g = eng.deal(n, D.shuffled(rng), { first: room.hand === 0 || leader < 0, leader: leader < 0 ? 0 : leader, stake: room.stake });
   room.hand += 1;
   room.status = 'playing';
   room.pub = g.pub; room.hands = g.hands; room.secret = { ...room.secret, stock: g.stock || [] };
@@ -87,9 +90,14 @@ function startHand(room, now, rng = Math.random) {
 /** Quy đổi sổ nợ (đơn vị cược) ra xu, giới hạn mỗi người thua tối đa bằng cọc. */
 function settle(room) {
   const n = room.seats.length;
+  if (Array.isArray(room.pub.net)) { // Poker: chip thắng thua chính là xu (đã cân, không quá số mang vào)
+    const lines = (room.pub.winners || []).map((s) => ({ from: -1, to: s, units: 0, xu: room.pub.won[s],
+      why: room.pub.show && room.pub.show[s] ? `Thắng với ${room.pub.show[s].name}` : 'Thắng (mọi người bỏ bài)' }));
+    return { net: [...room.pub.net], places: room.pub.places, lines };
+  }
   const units = Array(n).fill(0);
   for (const l of room.pub.ledger) { units[l.from] -= l.units; units[l.to] += l.units; }
-  const cap = room.stake * DEPOSIT;
+  const cap = depositOf(room);
   const loss = units.map((u) => (u < 0 ? Math.min(cap, -u * room.stake) : 0));
   const paid = loss.reduce((a, b) => a + b, 0);
   const gainUnits = units.reduce((a, u) => a + Math.max(0, u), 0);
@@ -103,7 +111,7 @@ function settle(room) {
 function afterOver(room) {
   room.status = 'settling';
   room.result = { hand: room.hand, ...settle(room), names: room.seats.map((s) => s.name), ids: room.seats.map((s) => s.id) };
-  room.leaderId = room.seats[room.pub.places[0]].id;
+  room.leaderId = room.game === 'poker' ? room.seats[(room.pub.dealer + 1) % room.seats.length].id : room.seats[room.pub.places[0]].id;
   room.deadline = 0; room.pub.deadline = 0;
   return { ok: true, over: true };
 }
@@ -149,11 +157,13 @@ function tick(room, now) {
   return moves;
 }
 
+const depositOf = (room) => room.stake * (GAMES[room.game] || GAMES.tienlen).deposit;
+
 /** Phần người xem được (bài trên tay chỉ của chính mình). */
 function viewFor(room, uid, now) {
   const seat = seatOf(room, uid);
   const v = { id: room.id, game: room.game, stake: room.stake, host: room.host, seats: room.seats, invited: room.invited, status: room.status,
-    hand: room.hand, pub: room.pub, result: room.result, seat, now, deposit: room.stake * DEPOSIT };
+    hand: room.hand, pub: room.pub, result: room.result, seat, now, deposit: depositOf(room) };
   v.cards = seat >= 0 && room.hands && room.status === 'playing' ? room.hands[seat] : [];
   if (room.game === 'phom' && seat >= 0 && room.status === 'playing') {
     v.canEat = PH.canEat(game(room), seat);
@@ -162,4 +172,4 @@ function viewFor(room, uid, now) {
   return v;
 }
 
-module.exports = { GAMES, TURN_MS, AWAY_MS, DEPOSIT, STAKE, create, join, leave, invite, startHand, play, tick, settle, settled, viewFor, seatOf };
+module.exports = { GAMES, TURN_MS, AWAY_MS, DEPOSIT, STAKE, depositOf, create, join, leave, invite, startHand, play, tick, settle, settled, viewFor, seatOf };

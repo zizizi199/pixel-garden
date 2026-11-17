@@ -792,7 +792,7 @@
       if (bn.dataset.id !== inv.id) {
         bn.dataset.id = inv.id; bn.innerHTML = '';
         const host = inv.seats.find((x) => x.id === inv.host);
-        const t = document.createElement('span'); t.textContent = `🃏 ${host ? host.name : 'Bạn'} mời chơi ${inv.game === 'phom' ? 'Phỏm' : 'Tiến lên'} (${inv.stake} xu/ván)`;
+        const t = document.createElement('span'); t.textContent = `🃏 ${host ? host.name : 'Bạn'} mời chơi ${CARD_GAMES[inv.game] || 'bài'} (${inv.stake} xu${inv.game === 'poker' ? ' big blind' : '/ván'})`;
         const yes = document.createElement('button'); yes.className = 'primary'; yes.textContent = 'Vào bàn';
         yes.onclick = () => { bn.remove(); lanAct({ type: 'cardJoin', room: inv.id }, true); };
         const no = document.createElement('button'); no.textContent = 'Bỏ qua';
@@ -805,32 +805,40 @@
     if (panel === 'cards' && lobbySig !== syncCards.sig && !typing) { syncCards.sig = lobbySig; renderPanel(); }
   }
   let cardForm = { game: 'tienlen', stake: 50, invite: new Set() };
+  const CARD_GAMES = { tienlen: 'Tiến lên miền Nam', phom: 'Phỏm', poker: 'Poker' };
+  const CARD_ICON = { tienlen: '🂡', phom: '🀄', poker: '♠' };
+  const CARD_MAX = { tienlen: 4, phom: 4, poker: 6 };
+  const CARD_DEP = { tienlen: 12, phom: 12, poker: 40 };
   function renderCardsLobby(body) {
     if (!L || L.mode !== 'group' || !L.role) { body.innerHTML = '<div class="note">Bàn bài chơi với người trong nhóm – hãy vào nhóm ở 🌐 Bạn bè & chat.</div>'; return; }
     const note = document.createElement('div'); note.className = 'note';
-    note.textContent = 'Chơi với người trong nhóm, ăn xu thật. 2–4 người/bàn, mỗi lượt 20 giây (hết giờ tự đánh hộ). Mỗi ván giữ cọc 12 × mức cược, hết ván trả lại cọc ± tiền thắng thua.';
+    note.textContent = 'Chơi với người trong nhóm, ăn xu thật. Mỗi lượt 20 giây (hết giờ tự đánh hộ). Tiến lên/Phỏm: mỗi ván giữ cọc 12 × mức cược. Poker: mỗi ván mang vào 40 big blind. Hết ván trả lại cọc ± tiền thắng thua.';
     body.appendChild(note);
     const rooms = L.rooms || [];
     const t1 = document.createElement('div'); t1.className = 'section-title'; t1.textContent = rooms.length ? 'Bàn đang mở' : 'Chưa có bàn nào – mở bàn mới bên dưới'; body.appendChild(t1);
     const g = grid(body);
     for (const r of rooms) {
-      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = r.game === 'phom' ? '🀄' : '🂡'; pic.style.setProperty('--c', '#52b788');
+      const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = CARD_ICON[r.game]; pic.style.setProperty('--c', '#52b788');
       const host = r.seats.find((x) => x.id === r.host);
-      g.appendChild(card({ pic, title: `${r.game === 'phom' ? 'Phỏm' : 'Tiến lên miền Nam'} · ${r.stake} xu`, lines: [
-        `Chủ bàn: <b>${esc(host ? host.name : '?')}</b> · ${r.seats.length}/4 người`, esc(r.seats.map((x) => x.name).join(', ')),
+      g.appendChild(card({ pic, title: `${CARD_GAMES[r.game]} · ${r.stake} xu${r.game === 'poker' ? ' BB' : ''}`, lines: [
+        `Chủ bàn: <b>${esc(host ? host.name : '?')}</b> · ${r.seats.length}/${CARD_MAX[r.game]} người`, esc(r.seats.map((x) => x.name).join(', ')),
         r.status === 'waiting' ? 'Đang chờ' : 'Đang chơi'],
       buttons: [r.mine ? { label: '🃏 Xem bàn', primary: true, onClick: () => { tableOpened = null; showTable(); } }
-        : { label: 'Vào bàn', primary: true, disabled: r.status !== 'waiting' || r.seats.length >= 4 || !!L.table, onClick: () => lanAct({ type: 'cardJoin', room: r.id }, true) }] }));
+        : { label: 'Vào bàn', primary: true, disabled: r.status !== 'waiting' || r.seats.length >= CARD_MAX[r.game] || !!L.table, onClick: () => lanAct({ type: 'cardJoin', room: r.id }, true) }] }));
     }
     const t2 = document.createElement('div'); t2.className = 'section-title'; t2.textContent = 'Mở bàn mới'; body.appendChild(t2);
     const f = document.createElement('div'); f.className = 'admin-row card-form';
-    f.innerHTML = `<select class="cf-game"><option value="tienlen">🂡 Tiến lên miền Nam</option><option value="phom">🀄 Phỏm (tá lả)</option></select>
-      Cược <input type="number" class="cf-stake" min="10" max="500" step="10" value="${cardForm.stake}" style="width:70px"/> xu/ván
+    f.innerHTML = `<select class="cf-game"><option value="tienlen">🂡 Tiến lên miền Nam (2–4 người)</option><option value="phom">🀄 Phỏm – tá lả (2–4 người)</option><option value="poker">♠ Poker Texas Hold'em (2–6 người)</option></select>
+      <span class="cf-lb"></span> <input type="number" class="cf-stake" min="10" max="500" step="10" value="${cardForm.stake}" style="width:70px"/> xu
       <span class="cf-dep"></span>`;
     f.querySelector('.cf-game').value = cardForm.game;
     const dep = f.querySelector('.cf-dep');
-    const upd = () => { cardForm.stake = Math.round(Number(f.querySelector('.cf-stake').value) || 0); dep.textContent = `(cần ≥ ${(cardForm.stake * 12).toLocaleString('vi-VN')} xu để giữ cọc)`; };
-    f.querySelector('.cf-game').onchange = (e) => { cardForm.game = e.target.value; };
+    const upd = () => {
+      cardForm.stake = Math.round(Number(f.querySelector('.cf-stake').value) || 0);
+      f.querySelector('.cf-lb').textContent = cardForm.game === 'poker' ? 'Big blind' : 'Cược';
+      dep.textContent = cardForm.game === 'poker' ? `(mỗi ván mang vào ${(cardForm.stake * 40).toLocaleString('vi-VN')} xu = 40 big blind)` : `xu/ván (cần ≥ ${(cardForm.stake * 12).toLocaleString('vi-VN')} xu để giữ cọc)`;
+    };
+    f.querySelector('.cf-game').onchange = (e) => { cardForm.game = e.target.value; upd(); };
     f.querySelector('.cf-stake').oninput = upd; upd();
     body.appendChild(f);
     const others = (L.players || []).filter((p) => p.id !== L.selfId);
@@ -900,7 +908,7 @@
     if (L && L.mode === 'group' && L.role) {
       const pic = document.createElement('div'); pic.className = 'power-pic'; pic.textContent = '🂡'; pic.style.setProperty('--c', '#52b788');
       const open = (L.rooms || []).filter((r) => r.status === 'waiting').length;
-      g.appendChild(card({ pic, title: 'Tiến lên & Phỏm (nhiều người)', lines: ['Mở bàn mời người trong nhóm chơi Tiến lên miền Nam hoặc Phỏm, ăn xu thật. 2–4 người, mỗi lượt 20 giây.',
+      g.appendChild(card({ pic, title: 'Tiến lên, Phỏm & Poker (nhiều người)', lines: ['Mở bàn mời người trong nhóm chơi Tiến lên miền Nam, Phỏm hoặc Poker Texas Hold\'em, ăn xu thật. Mỗi lượt 20 giây.',
         open ? `<b>${open} bàn đang chờ người</b>` : 'Chưa có bàn nào đang chờ'],
       buttons: [{ label: '🃏 Vào sảnh bài', primary: true, onClick: () => openPanel('cards') }] }));
     }
@@ -1122,7 +1130,7 @@
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
     bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực'], ['fish', 'Cá']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', cards: '🃏 Sảnh bài – Tiến lên & Phỏm', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin (chỉ máy của bạn)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', cards: '🃏 Sảnh bài – Tiến lên, Phỏm & Poker', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin (chỉ máy của bạn)' };
 
   function renderPanel() {
     if (!panel) return;
