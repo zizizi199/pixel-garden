@@ -30,6 +30,8 @@ if /i not "%BRANCH%"=="main" (echo LOI: dang o nhanh "%BRANCH%", hay chuyen ve m
 echo.
 echo === 1/5 Chay test ===
 call npm test || (echo LOI: test that bai - sua loi roi chay lai. & goto :fail)
+call node scripts\build-edge.js || (echo LOI: khong gop duoc ma may chu Edge Function. & goto :fail)
+git diff --quiet -- supabase/functions/game || (echo. & echo CHU Y: ma may chu thay doi - chay supabase\deploy-game.cmd de cap nhat may chu TRUOC khi moi nguoi tai ban moi. & echo.)
 
 echo.
 echo === 2/5 Phien ban ===

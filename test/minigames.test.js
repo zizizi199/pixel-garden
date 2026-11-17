@@ -37,3 +37,27 @@ test('ghép cặp: chỉ nhận hạt của cặp có trong đề; câu cá: ch�
   assert.ok(MG.sellFish(st, got.result.fish, true).ok);
   assert.ok(st.money > money);
 });
+
+test('Hoa 21: tính điểm A = 1/11, kết quả do lõi game tính; Bầu cua: lõi game lắc xúc xắc', () => {
+  assert.equal(MG.bjScore([{ r: 1 }, { r: 13 }]), 21);
+  assert.equal(MG.bjScore([{ r: 1 }, { r: 1 }, { r: 9 }]), 21);
+  assert.equal(MG.bjScore([{ r: 10 }, { r: 5 }, { r: 9 }]), 24);
+  const st = G.createState();
+  st.money = 5000;
+  assert.equal(MG.start(st, 'blackjack', Date.now(), Math.random, { bet: 5 }).ok, false, 'cược dưới mức tối thiểu');
+  let r;
+  do { r = MG.start(st, 'blackjack', Date.now(), Math.random, { bet: 100 }); } while (r.ok && r.done); // bỏ qua ván có blackjack ngay
+  if (r.ok) {
+    const cheat = MG.finish(st, 'blackjack', r.token, { outcome: 'blackjack' });
+    assert.equal(cheat.result.outcome, 'lose', 'gửi kết quả giả = thua');
+  }
+  const money = st.money;
+  assert.equal(MG.start(st, 'baucua', Date.now(), Math.random, { bets: [1, 2, 3, 4].map(() => ({ face: 'ca_koi', amount: 10 })) }).ok, false, 'tối đa 3 đồng xu');
+  const bets = [{ face: 'ca_koi', amount: 50 }, { face: 'ga_con', amount: 100 }, { face: 'ca_koi', amount: 10 }];
+  const bc = MG.start(st, 'baucua', Date.now(), Math.random, { bets });
+  assert.equal(st.money, money - 160, 'trừ tổng cược khi vào lượt');
+  const f = MG.finish(st, 'baucua', bc.token, { dice: ['ca_koi', 'ca_koi', 'ca_koi'] });
+  assert.equal(f.result.dice.length, 3);
+  const expect = bets.reduce((a, b) => { const h = f.result.dice.filter((d) => d === b.face).length; return a + (h ? b.amount * (1 + h) : 0); }, 0);
+  assert.equal(st.money, money - 160 + expect, 'trả xu theo từng đồng xu, xúc xắc do lõi game lắc');
+});

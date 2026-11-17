@@ -87,16 +87,8 @@ function open(key, envelope, max = MAX_BODY) {
   return msg;
 }
 
-// Danh sách trường cho phép trên mạng. Không sao chép trực tiếp G.view(state).
-function publicGarden(view) {
-  return {
-    slots: (view.slots || []).slice(0, 12).map((s) => ({ pot: s.pot, decor: (s.decor || []).slice(0, 4), species: s.species || null, stage: s.stage,
-      water: Math.round(Number(s.water) || 0), thirsty: !!s.thirsty })),
-    pet: view.pet ? view.pet.id : null,
-    house: view.house ? { level: view.house.level, decor: view.house.decor } : null,
-    scene: { object: view.scene && view.scene.object || null, background: view.scene && view.scene.background || null },
-  };
-}
+// Danh sách trường cho phép trên mạng: src/core/snapshot.js (dùng chung với máy chủ).
+const { publicGarden } = require('../core/snapshot');
 
 function safeGarden(value) {
   if (!value || !Array.isArray(value.slots)) return null;

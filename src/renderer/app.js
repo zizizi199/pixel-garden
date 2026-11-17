@@ -732,7 +732,7 @@
 
   // ------------------------------------------------------------ mini game
   function gameCtx() {
-    return { api, toast, Sound, esc, Sprites, SP, FISH, canvasOf, V: () => V,
+    return { api, toast, Sound, esc, Sprites, SP, FISH, PET, canvasOf, V: () => V, games: CAT.games,
       enterTall: () => {
         if (arenaShown) hideArena();
         panel = null; $('#panel').classList.add('hidden');
@@ -765,6 +765,8 @@
     if (id === 'bugs') setTimeout(() => MiniGames.bugs(gameCtx()), panel ? 300 : 0);
     if (id === 'memory') MiniGames.memory(gameCtx());
     if (id === 'fish') MiniGames.fishing(gameCtx());
+    if (id === 'blackjack') MiniGames.blackjack(gameCtx());
+    if (id === 'baucua') MiniGames.baucua(gameCtx());
   }
   function renderGames(body) {
     const note = document.createElement('div'); note.className = 'note';
@@ -775,6 +777,8 @@
     const list = [
       ['bugs', '🐛', 'Bắt sâu', 'Sâu, ốc bò lên chậu – bấm trúng trước khi chúng gặm lá. 30 giây, càng về sau càng nhanh. Bọ vàng 🪲 hiếm rơi hạt giống quý.', 'Phân bón: điểm càng cao phân càng xịn (≥45 điểm: Phân siêu tốc).'],
       ['memory', '🃏', 'Ghép cặp hoa', 'Lật 2 thẻ giống nhau để ghép 6 cặp hoa, tối đa 14 lượt lật.', 'Mỗi cặp = 1 hạt loài đó; ≤9 lượt được ⭐⭐⭐ và thêm 1 hạt.'],
+      ['blackjack', '🃏', 'Hoa 21', 'Blackjack cược xu (10–500 xu/ván): rút gần 21 nhất mà không quá 21. J/Q/K = 10, A = 1 hoặc 11. Pet của bạn làm nhà cái, rút tới 17.', 'Thắng nhận lại ×2 cược · Blackjack ×2.5 · Hoà trả lại cược · Thua mất cược.'],
+      ['baucua', '🎲', 'Bầu cua thú cưng', 'Bầu cua cược xu (10–500 xu/lượt) với 6 con pet trong cửa hàng: chọn 1 con rồi lắc 3 xúc xắc.', 'Ra 1 mặt nhận lại ×2 · 2 mặt ×3 · 3 mặt ×4 · không ra mất cược.'],
       ['fish', '🎣', 'Câu cá ao vườn', 'Chờ phao chìm thì giật cần, rồi giữ chuột để giữ cá trong vùng xanh. Cá chia bậc Common → Secret; pet bậc cao giúp gặp cá hiếm, mèo giúp kéo dễ hơn.', 'Cá bán ra xu (Kho đồ › Cá); thỉnh thoảng câu được rương chậu / chưởng lực.'],
     ];
     if (L && L.mode === 'group' && L.role) {
@@ -1002,7 +1006,7 @@
     shop: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['pets', 'Pet'], ['powers', 'Chưởng lực'], ['items', 'Vật phẩm']],
     bag: [['seeds', 'Hạt giống'], ['pots', 'Chậu'], ['decor', 'Trang trí'], ['scene', 'Cảnh vườn'], ['powers', 'Chưởng lực'], ['fish', 'Cá']],
   };
-  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin – công cụ test (chỉ có ở bản chạy thử)' };
+  const PANEL_TITLE = { wheel: '🎡 Vòng quay may mắn', house: '🏠 Nhà thú', gift: '🎁 Quà hằng ngày', notify: '🔔 Việc cần làm', wiki: '📖 Sổ tay cây', log: '📜 Nhật ký vườn', settings: '⚙ Cài đặt', detail: '🔍 Chi tiết cây', lan: '🌐 Bạn bè & chat', games: '🎮 Mini game', tree: '🌳 Thần mộc của nhóm', admin: '🛠 Admin (chỉ máy của bạn)' };
 
   function renderPanel() {
     if (!panel) return;
@@ -1512,11 +1516,12 @@
 
   function renderAdmin(body) {
     const note = document.createElement('div'); note.className = 'note';
-    note.textContent = 'Dùng để test nhanh. Bảng này tự ẩn ở bản đóng gói .exe. "Tua" chạy vườn ngay cả ngoài thời gian hoạt động.';
+    note.textContent = 'Chỉ hiện trên máy Admin; mọi lệnh được ký và máy chủ kiểm tra. "Tua" chạy vườn ngay cả ngoài thời gian hoạt động.';
     body.appendChild(note);
     const groups = [
       ['Tiền & cấp', [['+1.000 xu', { op: 'money', amount: 1000 }], ['+10.000 xu', { op: 'money', amount: 10000 }], ['+100.000 xu', { op: 'money', amount: 100000 }], ['+100 EXP', { op: 'exp', amount: 100 }], ['+1.000 EXP', { op: 'exp', amount: 1000 }], ['−100 EXP', { op: 'exp', amount: -100 }], ['+1 cấp', { op: 'level', amount: 1 }], ['−1 cấp', { op: 'level', amount: -1 }], ['+5 cấp', { op: 'level', amount: 5 }], ['+10 phân bón', { op: 'fert' }], ['+5 hạt mỗi giống', { op: 'seeds' }], ['Mở khoá tất cả', { op: 'unlockAll' }], ['Cho mở quà lại', { op: 'resetDaily' }], ['+1 lượt quay free', { op: 'freeSpin' }]]],
       ['Thời gian vườn', [['Tua 10 phút', { op: 'forward', minutes: 10 }], ['Tua 30 phút', { op: 'forward', minutes: 30 }], ['Tua 1 giờ', { op: 'forward', minutes: 60 }], ['Tua 3 giờ', { op: 'forward', minutes: 180 }], ['Tua 1 ngày (8 giờ)', { op: 'forward', minutes: 480 }]]],
+      ['Mini game', [['Đặt lại lượt chơi hôm nay', { op: 'resetGames' }]]],
       ['Cây & pet', [['Cho tất cả cây nở', { op: 'bloomAll' }], ['Làm tất cả cây khát', { op: 'thirstAll' }], ['Đánh thức pet', { op: 'wakePet' }], ['Giả lập hái trộm', { op: 'steal' }]]],
     ];
     for (const [title, btns] of groups) {
@@ -1540,6 +1545,71 @@
     row.querySelector('#ad-exp-btn').onclick = () => act({ type: 'admin', op: 'exp', amount: Number(row.querySelector('#ad-exp').value) });
     row.querySelector('#ad-min-btn').onclick = () => act({ type: 'admin', op: 'forward', minutes: Number(row.querySelector('#ad-min').value) });
     row.querySelector('#ad-reset').onclick = () => { if (!needConfirm('reset', 'Bấm lần nữa để XOÁ vườn và chơi lại từ đầu.')) act({ type: 'adminReset' }); };
+    renderAccounts(body);
+  }
+
+  // ---------------- Admin › Tài khoản người chơi (danh sách lấy từ máy chủ, lệnh gửi kèm chữ ký Admin)
+  let adminAcc = null; let adminSel = null; let adminLoading = false;
+  async function loadAccounts() {
+    adminLoading = true;
+    if (panel === 'admin') renderPanel();
+    const r = await api.action({ type: 'adminList' });
+    adminLoading = false;
+    if (r.ok) adminAcc = Array.isArray(r.accounts) ? r.accounts : [];
+    else toast(r.msg, true);
+    if (panel === 'admin') renderPanel();
+  }
+  async function runOnAccount(inner) {
+    const r = await act({ type: 'adminUser', target: adminSel, a: inner });
+    if (r.ok) loadAccounts();
+  }
+  function renderAccounts(body) {
+    const t = document.createElement('div'); t.className = 'section-title';
+    t.textContent = `Tài khoản người chơi${adminAcc ? ` (${adminAcc.length})` : ''} `;
+    const load = document.createElement('button'); load.textContent = adminLoading ? 'Đang tải…' : adminAcc ? '↻ Làm mới' : 'Tải danh sách';
+    load.disabled = adminLoading; load.onclick = loadAccounts;
+    t.appendChild(load); body.appendChild(t);
+    if (!adminAcc) return;
+    const d = new Date(); const today = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    const ago = (ms) => { const m = Math.round((Date.now() - ms) / 60000); return m < 1 ? 'vừa xong' : m < 60 ? `${m} phút trước` : m < 1440 ? `${Math.round(m / 60)} giờ trước` : `${Math.round(m / 1440)} ngày trước`; };
+    const nameOf = (a) => `${a.name || a.alias || 'Người chơi'}${a.alias && a.name && a.alias !== a.name ? ` (${a.alias})` : ''}`;
+    const tbl = document.createElement('table'); tbl.className = 'acc-table';
+    tbl.innerHTML = '<tr><th>Người chơi</th><th>Cấp</th><th>Xu</th><th>Mini game hôm nay</th><th>Hoạt động</th><th></th></tr>';
+    for (const a of adminAcc) {
+      const plays = a.playDay === today ? Object.entries(a.plays || {}).filter(([, n]) => n > 0) : [];
+      const tr = document.createElement('tr'); if (a.id === adminSel) tr.className = 'on';
+      tr.innerHTML = `<td>${esc(nameOf(a))}${a.me ? ' <b>(bạn)</b>' : ''}<div class="meta">${esc(a.id.slice(0, 8))}</div></td>`
+        + `<td>${a.level}</td><td>${Number(a.money).toLocaleString('vi-VN')}</td>`
+        + `<td>${plays.length ? plays.map(([g, n]) => `${esc(((CAT.games && CAT.games.names) || {})[g] || g)} ${n}`).join(', ') : '–'}</td>`
+        + `<td>${a.online ? '🟢 đang chơi' : esc(ago(a.updated))}</td><td></td>`;
+      const b = document.createElement('button'); b.textContent = a.id === adminSel ? 'Đang chọn' : 'Chọn';
+      b.onclick = () => { adminSel = a.id === adminSel ? null : a.id; renderPanel(); };
+      tr.lastChild.appendChild(b); tbl.appendChild(tr);
+    }
+    body.appendChild(tbl);
+    const sel = adminAcc.find((a) => a.id === adminSel);
+    if (!sel) return;
+    const h = document.createElement('div'); h.className = 'section-title'; h.textContent = `Thao tác với ${nameOf(sel)}`; body.appendChild(h);
+    const row = document.createElement('div'); row.className = 'admin-row';
+    const quick = [['+1.000 xu', { op: 'money', amount: 1000 }], ['+10.000 xu', { op: 'money', amount: 10000 }], ['+500 EXP', { op: 'exp', amount: 500 }],
+      ['+1 cấp', { op: 'level', amount: 1 }], ['Đặt lại lượt mini game', { op: 'resetGames' }], ['Cho mở quà lại', { op: 'resetDaily' }],
+      ['+1 lượt quay free', { op: 'freeSpin' }], ['+10 phân bón', { op: 'fert' }], ['+5 hạt mỗi giống', { op: 'seeds' }]];
+    for (const [label, a] of quick) {
+      const b = document.createElement('button'); b.textContent = label;
+      b.onclick = () => runOnAccount({ type: 'admin', ...a });
+      row.appendChild(b);
+    }
+    body.appendChild(row);
+    const row2 = document.createElement('div'); row2.className = 'admin-row'; row2.style.marginTop = '6px';
+    row2.innerHTML = 'Xu <input type="number" class="acc-money" value="1000" style="width:90px"/> <button class="acc-money-btn">Cộng/trừ</button>'
+      + ' &nbsp; EXP <input type="number" class="acc-exp" value="200" style="width:80px"/> <button class="acc-exp-btn">Cộng/trừ</button>'
+      + ' &nbsp; <button class="acc-reset" style="background:#ffd6d6">Xoá vườn – chơi lại từ đầu</button>';
+    row2.querySelector('.acc-money-btn').onclick = () => runOnAccount({ type: 'admin', op: 'money', amount: Number(row2.querySelector('.acc-money').value) });
+    row2.querySelector('.acc-exp-btn').onclick = () => runOnAccount({ type: 'admin', op: 'exp', amount: Number(row2.querySelector('.acc-exp').value) });
+    row2.querySelector('.acc-reset').onclick = () => {
+      if (!needConfirm(`acc-reset-${sel.id}`, `Bấm lần nữa để XOÁ vườn của ${nameOf(sel)} (giữ Cài đặt).`)) runOnAccount({ type: 'adminReset' });
+    };
+    body.appendChild(row2);
   }
 
   function renderDetail(body) {

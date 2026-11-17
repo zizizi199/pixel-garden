@@ -3,13 +3,15 @@
 // Chỉ gọi các hàm RPC vp_* trong supabase/schema.sql (bảng bị khoá bằng RLS).
 // - Đăng nhập ẩn danh (Supabase Anonymous Sign-ins); refresh token lưu trong lan.sec (đã mã hoá).
 // - Mã nhóm không gửi lên server: chỉ gửi SHA-256. Chat mã hoá AES-256-GCM bằng khoá suy ra từ mã nhóm.
-// - Không gửi lịch hoạt động; ảnh chụp vườn chỉ gồm trường hiển thị + phần thưởng/khả năng chặn trộm.
+// - Vườn, tiền, đồ… của người chơi lưu ở máy chủ (Edge Function "game", server/game.js): mọi hành động
+//   có cộng/trừ đồ đi qua game() → máy chủ tự tính; ảnh chụp vườn cho nhóm cũng do máy chủ tạo.
+// - Phần còn lại (chat, ai đang online, xem vườn, trả lời đấu trường) gọi thẳng RPC vp_poll/vp_send_chat/vp_duel_*.
 const crypto = require('node:crypto');
+const { PROTOCOL } = require('../core/actions');
 const { safeGarden } = require('./lan');
 
 const SYNC_MS = 3000;
 const IDLE_OFFLINE_S = 30;
-const GARDEN_REFRESH_MS = 60000;
 const cleanName = (s) => String(s || '').replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 24) || 'Người chơi';
 const cleanText = (s) => String(s || '').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim().slice(0, 300);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -53,16 +55,12 @@ function validSupabase(cfg) {
 }
 
 class GroupRoom {
-  constructor({ config, saveConfig, getGarden, applyEvents, applyReward, changed, supabase, fetch, now, getArena, applyArena }) {
-    this.getArena = getArena || (() => ({ pet: null, power: 'cu_huc' }));
-    this.applyArena = applyArena || (async () => {});
+  constructor({ config, saveConfig, changed, supabase, fetch, now, applyServer }) {
+    this.applyServer = applyServer || (() => {}); // nhận state mới từ máy chủ trò chơi
     this.duels = []; this.duel = null; this.duelTimer = null; this.duelBusy = false;
     this.tree = null; // tóm tắt Thần mộc (từ vp_sync)
     this.config = { alias: 'Người chơi', friends: [], group: null, auth: null, ...config };
     this.saveConfig = saveConfig;
-    this.getGarden = getGarden;
-    this.applyEvents = applyEvents;
-    this.applyReward = applyReward;
     this.changed = changed;
     this.fetch = fetch || globalThis.fetch;
     this.now = now || Date.now;
@@ -74,7 +72,6 @@ class GroupRoom {
     this.lastMsg = 0;
     this.watchId = null;
     this.watched = null;
-    this.sentGarden = ''; this.sentAt = 0;
     this.timer = null; this.syncing = null; this.error = ''; this.stopped = true;
   }
 
@@ -94,12 +91,12 @@ class GroupRoom {
   emit() { this.changed(this.status()); }
 
   // ------------------------------------------------------------ HTTP / đăng nhập
-  async http(path, { method = 'POST', body, auth = true } = {}) {
+  async http(path, { method = 'POST', body, auth = true, timeout = 12000 } = {}) {
     if (!this.sb) throw new Error('Bản này chưa cấu hình Supabase.');
     const headers = { apikey: this.sb.key, 'content-type': 'application/json' };
     if (auth) headers.authorization = `Bearer ${await this.accessToken()}`;
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 12000);
+    const t = setTimeout(() => ctrl.abort(), timeout);
     let res;
     try {
       res = await this.fetch(`${this.sb.url}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: ctrl.signal });
@@ -116,13 +113,19 @@ class GroupRoom {
     return data;
   }
 
-  async accessToken() {
-    if (this.session && this.session.exp - 60000 > this.now()) return this.session.access;
+  accessToken() {
+    if (this.session && this.session.exp - 60000 > this.now()) return Promise.resolve(this.session.access);
+    // chỉ 1 lần làm mới token tại 1 thời điểm (refresh token dùng 2 lần cùng lúc sẽ bị Supabase từ chối)
+    if (!this.tokenP) this.tokenP = this.login().finally(() => { this.tokenP = null; });
+    return this.tokenP;
+  }
+
+  async login() {
     const a = this.config.auth;
     let r = null;
     if (a && a.refresh) {
       try { r = await this.http('/auth/v1/token?grant_type=refresh_token', { body: { refresh_token: a.refresh }, auth: false }); }
-      catch (e) { if (e.status && e.status < 500) r = null; else throw e; }
+      catch (e) { if ([400, 401, 403].includes(e.status)) r = null; else throw e; } // 429/5xx/mất mạng: giữ tài khoản, thử lại sau
     }
     if (!r) r = await this.http('/auth/v1/signup', { body: { data: {} }, auth: false }).catch((e) => {
       throw new Error(/anonymous/i.test(e.message) ? 'Supabase chưa bật "Anonymous Sign-ins".' : e.message);
@@ -130,7 +133,9 @@ class GroupRoom {
     if (!r || !r.access_token || !r.user || !UUID.test(r.user.id)) throw new Error('Đăng nhập máy chủ nhóm thất bại.');
     const changedUser = !a || a.uid !== r.user.id;
     this.session = { access: r.access_token, exp: this.now() + (Number(r.expires_in) || 3600) * 1000 };
-    this.config.auth = { uid: r.user.id, refresh: r.refresh_token };
+    // vườn trên máy chủ gắn với tài khoản này; nếu buộc phải tạo tài khoản mới thì nhớ mã cũ để Admin khôi phục
+    const prev = a && a.uid && a.uid !== r.user.id ? [...((a && a.prev) || []), a.uid].slice(-5) : ((a && a.prev) || []);
+    this.config.auth = { uid: r.user.id, refresh: r.refresh_token, prev };
     await this.saveConfig(this.config);
     // tài khoản ẩn danh mới (token cũ hết hạn) → tự vào lại nhóm bằng mã đã lưu
     if (changedUser && a && this.inGroup && !this.rejoining) {
@@ -148,6 +153,28 @@ class GroupRoom {
       this.session = null;
       return this.http(`/rest/v1/rpc/${name}`, { body: args });
     }
+  }
+
+  // ------------------------------------------------------------ máy chủ trò chơi (Edge Function "game")
+  /** Gửi 1 yêu cầu cho máy chủ trò chơi. body: { a } hoặc { admin }, thêm { init } lần đầu. */
+  async game(body) {
+    const send = () => this.http('/functions/v1/game', { timeout: 20000, body: {
+      v: PROTOCOL, tz: -new Date().getTimezoneOffset(), group: this.inGroup ? this.config.group.id : null, ...body } });
+    let res;
+    try { res = await send(); } catch (e) {
+      if (e.status !== 401) throw Object.assign(new Error(e.status === 404 ? 'Máy chủ trò chơi chưa được cài (xem supabase/README.md).' : e.message), { status: e.status });
+      this.session = null;
+      res = await send();
+    }
+    if (!res || typeof res !== 'object') throw new Error('Máy chủ trò chơi trả về dữ liệu lạ.');
+    if (res.state) this.applyServer(res);
+    return res;
+  }
+
+  /** Hành động cần máy chủ tính (thăm vườn, Thần mộc, đấu trường…) → kết quả { ok, msg, ... }. */
+  async server(a) {
+    const res = await this.game({ a });
+    return res.r && typeof res.r === 'object' ? res.r : { ok: false, msg: 'Không thực hiện được.' };
   }
 
   // ------------------------------------------------------------ nhóm
@@ -170,7 +197,7 @@ class GroupRoom {
   async enter(id, code) {
     if (!UUID.test(String(id))) throw new Error('Máy chủ nhóm trả về dữ liệu lạ.');
     this.config.group = { id, code };
-    this.messages = []; this.lastMsg = 0; this.members = []; this.sentGarden = '';
+    this.messages = []; this.lastMsg = 0; this.members = [];
     await this.saveConfig(this.config);
     this.start();
     await this.syncNow();
@@ -229,13 +256,9 @@ class GroupRoom {
     if (!UUID.test(String(target)) || !['water', 'steal'].includes(kind) || !Number.isInteger(slot) || slot < 0 || slot > 11) {
       throw new Error('Hành động không hợp lệ.');
     }
-    const r = await this.rpc('vp_visit', { p_group: this.config.group.id, p_owner: target, p_kind: kind, p_slot: slot });
-    const out = { ok: !!(r && r.ok), msg: cleanText(r && r.msg) || 'Không thực hiện được.' };
-    if (out.ok && r.loot) {
-      const loot = { money: Math.max(0, Math.min(10000, Math.round(Number(r.loot.money) || 0))), exp: Math.max(0, Math.min(10000, Math.round(Number(r.loot.exp) || 0))) };
-      await this.applyReward(loot);
-      if (kind === 'steal') out.loot = loot;
-    }
+    const r = await this.server({ type: 'visit', target, kind, slot });
+    const out = { ok: !!r.ok, msg: cleanText(r.msg) || 'Không thực hiện được.' };
+    if (out.ok && r.loot) out.loot = r.loot;
     await this.syncNow().catch(() => {});
     return out;
   }
@@ -255,43 +278,29 @@ class GroupRoom {
     } };
   }
 
-  async treeGive(kind, amount) {
+  /** Tưới / bón / nhận rương Thần mộc: máy chủ trò chơi trừ phân, cộng EXP, mở rương. */
+  async treeAction(a) {
     if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
-    const r = await this.rpc('vp_tree_give', { p_group: this.config.group.id, p_kind: kind, p_amount: Number(amount) || 0 });
+    const r = await this.server(a);
     this.syncNow().catch(() => {});
-    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg) };
-  }
-
-  async treeClaimTop() {
-    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
-    const r = await this.rpc('vp_tree_claim_top', { p_group: this.config.group.id });
-    this.syncNow().catch(() => {});
-    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg), rank: Number(r && r.rank) };
-  }
-
-  async treeClaim(milestone) {
-    if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
-    const r = await this.rpc('vp_tree_claim', { p_group: this.config.group.id, p_milestone: Number(milestone) });
-    this.syncNow().catch(() => {});
-    return { ok: !!(r && r.ok), msg: cleanText(r && r.msg), milestone: Number(r && r.milestone) };
+    return { ...r, ok: !!r.ok, msg: cleanText(r.msg) };
   }
 
   // ------------------------------------------------------------ đấu trường thú
   async duelInvite(target) {
     if (!this.inGroup) throw new Error('Hãy vào nhóm trước.');
     if (!UUID.test(String(target))) throw new Error('Người chơi không hợp lệ.');
-    const me = this.getArena();
-    if (!me.pet) throw new Error('Bạn cần có pet đang ra vườn để vào đấu trường.');
-    const id = await this.rpc('vp_duel_invite', { p_group: this.config.group.id, p_opponent: target, p_pet: me.pet, p_power: me.power });
-    await this.openDuel(id);
+    const r = await this.server({ type: 'duelInvite', target });
+    if (!r.ok) return { ok: false, msg: cleanText(r.msg) };
+    await this.openDuel(r.id);
     await this.syncNow().catch(() => {});
     return { ok: true, msg: 'Đã gửi lời thách đấu, chờ đối thủ đồng ý…' };
   }
 
   async duelRespond(id, accept) {
-    const me = this.getArena();
-    if (accept && !me.pet) throw new Error('Bạn cần có pet đang ra vườn để vào đấu trường.');
-    await this.rpc('vp_duel_respond', { p_duel: id, p_accept: !!accept, p_pet: me.pet, p_power: me.power });
+    if (!UUID.test(String(id))) throw new Error('Không tìm thấy lời mời.');
+    const r = await this.server({ type: 'duelRespond', id, accept: !!accept });
+    if (!r.ok) return { ok: false, msg: cleanText(r.msg) };
     if (accept) await this.openDuel(id); else if (this.duel && this.duel.id === id) this.duel = null;
     await this.syncNow().catch(() => {});
     return { ok: true, msg: accept ? 'Vào đấu trường!' : 'Đã từ chối lời thách đấu.' };
@@ -369,10 +378,8 @@ class GroupRoom {
         cards: r.cards, pick: Number.isInteger(r.pick) ? r.pick : null, prize: r.prize || null, applied: !!r.applied };
       const d = this.duel;
       if (d.status === 'finished' && !d.applied && (!d.winner || d.pick !== null)) {
-        const meId = d[d.me].id; const opp = d.me === 'a' ? d.b : d.a;
-        await this.applyArena({ gain: d.winner === meId, lose: !!d.winner && d.winner !== meId, prize: d.prize, opponent: opp.name });
-        await this.rpc('vp_duel_ack', { p_duel: d.id });
-        d.applied = true;
+        const s = await this.server({ type: 'duelSettle', id: d.id }); // máy chủ trao/trừ món rồi đánh dấu đã nhận
+        d.applied = !!s.applied;
       }
     } finally { this.duelBusy = false; this.emit(); }
   }
@@ -403,20 +410,15 @@ class GroupRoom {
   async sync() {
     if (!this.inGroup) return;
     const g = this.config.group;
-    const garden = this.getGarden();
-    const text = JSON.stringify(garden);
-    const sendGarden = text !== this.sentGarden || this.now() - this.sentAt > GARDEN_REFRESH_MS;
     let r;
     try {
-      r = await this.rpc('vp_sync', { p_group: g.id, p_away: this.away, p_garden: sendGarden ? garden : null,
-        p_since: this.lastMsg, p_watch: this.watchId });
+      r = await this.rpc('vp_poll', { p_group: g.id, p_away: this.away, p_since: this.lastMsg, p_watch: this.watchId });
     } catch (e) {
       this.error = e.message;
       if (/không còn trong nhóm/i.test(e.message)) { this.stop(); this.config.group = null; await this.saveConfig(this.config); }
       this.emit();
       throw e;
     }
-    if (sendGarden) { this.sentGarden = text; this.sentAt = this.now(); }
     this.error = '';
     const key = chatKey(g.code);
     this.members = (Array.isArray(r && r.members) ? r.members : []).filter((m) => m && UUID.test(m.id)).slice(0, 60)
@@ -436,11 +438,6 @@ class GroupRoom {
     this.watchDuels();
     const t = r && r.tree;
     this.tree = t ? { season: Number(t.season) || 1, growth: Number(t.growth) || 0, max: Number(t.max) || 1, watered: !!t.watered, claimable: Number(t.claimable) || 0 } : null;
-    const events = (Array.isArray(r && r.events) ? r.events : []).filter((e) => e && Number.isSafeInteger(e.id));
-    if (events.length) {
-      await this.applyEvents(events);
-      await this.rpc('vp_ack_events', { p_group: g.id, p_ids: events.map((e) => e.id) });
-    }
     this.emit();
   }
 }

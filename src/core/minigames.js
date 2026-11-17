@@ -6,9 +6,15 @@
  * kết quả gửi lên bị kẹp trong giới hạn hợp lý. Mỗi trò có số lượt mỗi ngày.
  */
 const C = require('./catalog');
+const CL = require('./clock');
 
-const LIMITS = { bugs: 3, memory: 3, fish: 5 };
-const NAMES = { bugs: 'Bắt sâu', memory: 'Ghép cặp hoa', fish: 'Câu cá ao vườn' };
+const LIMITS = { bugs: 3, memory: 3, fish: 5, blackjack: 5, baucua: 5 };
+const NAMES = { bugs: 'Bắt sâu', memory: 'Ghép cặp hoa', fish: 'Câu cá ao vườn', blackjack: 'Hoa 21', baucua: 'Bầu cua tôm cá' };
+
+// Hoa 21 và Bầu cua: cược xu, thắng nhận lại xu (chỉ xu trong game). Giới hạn mức cược + số ván/ngày để giữ cân bằng.
+const BET = { min: 10, max: 500 };
+// Bầu cua: 6 mặt xúc xắc là 6 con pet trong cửa hàng.
+const BAUCUA = ['ga_con', 'vit_con', 'ca_koi', 'tho_trang', 'meo_muop', 'cho_co'];
 
 /** Cá: tier theo bậc độ hiếm chung; price = giá bán 1 con; diff = độ khó khi kéo (0 dễ → 1 rất khó). */
 const FISH = [
@@ -30,7 +36,7 @@ const FISH_BY_ID = Object.fromEntries(FISH.map((f) => [f.id, f]));
 const FISH_RATES = [52, 28, 13, 5, 1.6, 0.35, 0.05]; // % theo bậc (không hiển thị cho người chơi)
 const CHEST_CHANCE = 0.06;
 
-const dayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+const dayKey = (ms) => { const d = CL.parts(ms); return `${d.y}-${d.mo + 1}-${d.d}`; };
 const pick = (list, rng) => list[Math.floor(rng() * list.length)];
 const ok = (msg, extra = {}) => ({ ok: true, msg, ...extra });
 const fail = (msg) => ({ ok: false, msg });
@@ -69,18 +75,45 @@ function rollFish(state, rng) {
 }
 
 /** Bắt đầu 1 lượt: trừ lượt trong ngày và tạo đề bài. */
-function start(state, game, now = Date.now(), rng = Math.random) {
+function start(state, game, now = Date.now(), rng = Math.random, opts = {}) {
   if (!LIMITS[game]) return fail('Trò chơi không hợp lệ.');
   const mg = ensure(state, now);
   if ((mg.plays[game] || 0) >= LIMITS[game]) return fail(`Hôm nay đã hết lượt ${NAMES[game]} – mai quay lại nhé!`);
+  let bet = 0; let bets = null;
+  if (game === 'blackjack') {
+    bet = Math.round(Number(opts.bet) || 0);
+    if (bet < BET.min || bet > BET.max) return fail(`Mức cược từ ${BET.min} đến ${BET.max} xu.`);
+  } else if (game === 'baucua') { // tối đa 3 đồng xu, mỗi đồng đặt lên 1 con (có thể chồng lên cùng 1 con)
+    bets = (Array.isArray(opts.bets) ? opts.bets : []).slice(0, 4).map((b) => ({ face: b && b.face, amount: Math.round(Number(b && b.amount) || 0) }));
+    if (!bets.length || bets.length > 3) return fail('Đặt từ 1 đến 3 đồng xu lên bàn.');
+    if (bets.some((b) => !BAUCUA.includes(b.face) || b.amount < BET.min || b.amount > BET.max)) return fail(`Mỗi đồng xu từ ${BET.min} đến ${BET.max} xu.`);
+    bet = bets.reduce((a, b) => a + b.amount, 0);
+  }
+  if (bet) {
+    if (state.money < bet) return fail(`Không đủ xu để cược ${bet}.`);
+    state.money -= bet; // trừ cược ngay khi vào ván (bỏ ngang = mất cược)
+  }
   mg.plays[game] = (mg.plays[game] || 0) + 1;
   const token = `${game}-${now}-${Math.floor(rng() * 1e9)}`;
-  const p = { game, token, at: now };
+  const p = { game, token, at: now, bet, bets };
   const out = { token, left: LIMITS[game] - mg.plays[game] };
   if (game === 'bugs') {
     p.goldenAt = 6 + Math.floor(rng() * 18); // giây xuất hiện bọ vàng
     p.golden = rng() < 0.6; // không phải lượt nào cũng có
     Object.assign(out, { seconds: 30, goldenAt: p.golden ? p.goldenAt : null });
+  } else if (game === 'blackjack') {
+    // bộ 52 lá xáo ở đây; giao diện chỉ thấy bài đã lật và gửi Rút/Dằn
+    const deck = [];
+    for (let su = 0; su < 4; su++) for (let r = 1; r <= 13; r++) deck.push({ r, s: su });
+    for (let i = deck.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [deck[i], deck[j]] = [deck[j], deck[i]]; }
+    p.deck = deck; p.player = [deck.pop(), deck.pop()]; p.dealer = [deck.pop(), deck.pop()];
+    if (bjScore(p.player) === 21 || bjScore(p.dealer) === 21) { // blackjack ngay 2 lá đầu
+      mg.pending = p;
+      return finishBJ(state, p, now, rng, out);
+    }
+    Object.assign(out, bjView(p, false), { bet });
+  } else if (game === 'baucua') {
+    Object.assign(out, { faces: BAUCUA, bet });
   } else if (game === 'memory') {
     const unlocked = state.unlocked.species.filter((id) => C.SPECIES_BY_ID[id]);
     const extra = C.SPECIES.filter((s) => !s.wheel && !unlocked.includes(s.id)).sort((a, b) => a.level - b.level).map((s) => s.id);
@@ -158,6 +191,71 @@ function rewardFish(state, p, result, rng) {
   return { score: 1, gifts: [`${f.icon} ${f.name}`], fish: f.id, tier: f.tier };
 }
 
+// ---------------------------------------------------------------- Hoa 21 (Blackjack thường, không cược)
+function bjScore(cards) {
+  let total = 0; let aces = 0;
+  for (const c of cards) { if (c.r === 1) { aces += 1; total += 11; } else total += Math.min(10, c.r); }
+  while (total > 21 && aces) { total -= 10; aces -= 1; }
+  return total;
+}
+function bjView(p, reveal) {
+  return { player: p.player, playerScore: bjScore(p.player), dealer: reveal ? p.dealer : [p.dealer[0]], dealerScore: reveal ? bjScore(p.dealer) : null };
+}
+function finishBJ(state, p, now, rng, out = {}) {
+  const ps = bjScore(p.player);
+  const natural = p.player.length === 2 && ps === 21;
+  if (ps <= 21 && !natural) while (bjScore(p.dealer) < 17) p.dealer.push(p.deck.pop()); // nhà cái rút tới 17
+  const ds = bjScore(p.dealer);
+  const dNatural = p.dealer.length === 2 && ds === 21;
+  let outcome;
+  if (ps > 21) outcome = 'bust';
+  else if (natural && !dNatural) outcome = 'blackjack';
+  else if (dNatural && !natural) outcome = 'lose';
+  else if (ds > 21 || ps > ds) outcome = 'win';
+  else if (ps === ds) outcome = 'push';
+  else outcome = 'lose';
+  p.resolved = outcome; // chỉ kết quả tính ở đây mới được nhận thưởng
+  const r = finish(state, 'blackjack', p.token, {}, now, rng);
+  return { ...r, ...out, ...bjView(p, true), outcome, done: true };
+}
+/** Hoa 21: Rút (hit) hoặc Dằn (stand). */
+function move(state, game, token, action, now = Date.now(), rng = Math.random) {
+  const mg = ensure(state, now);
+  const p = mg.pending;
+  if (game !== 'blackjack' || !p || p.game !== game || p.token !== token) return fail('Ván bài không hợp lệ hoặc đã kết thúc.');
+  if (action === 'hit') {
+    p.player.push(p.deck.pop());
+    if (bjScore(p.player) >= 21) return finishBJ(state, p, now, rng);
+    return ok('Rút thêm 1 lá.', bjView(p, false));
+  }
+  if (action === 'stand') return finishBJ(state, p, now, rng);
+  return fail('Hành động không hợp lệ.');
+}
+
+const BJ_TEXT = { blackjack: '🌟 Blackjack!', win: '🎉 Thắng!', push: '🤝 Hoà', lose: '😿 Thua', bust: '💥 Quá 21 – quắc!' };
+const BJ_PAY = { blackjack: 2.5, win: 2, push: 1, lose: 0, bust: 0 }; // nhận lại = cược × hệ số
+function rewardBJ(state, p) {
+  // kết quả do finishBJ tính từ bài thật trong lượt này (giao diện không gửi kết quả)
+  const o = BJ_TEXT[p.resolved] ? p.resolved : 'lose'; // gọi gameFinish thẳng từ giao diện = thua
+  const back = Math.floor(p.bet * BJ_PAY[o]);
+  state.money += back;
+  const net = back - p.bet;
+  return { score: 0, gifts: back ? [`+${back} xu`] : [], outcome: o, title: BJ_TEXT[o], bet: p.bet, back, net };
+}
+
+// ---------------------------------------------------------------- Bầu cua tôm cá (không cược)
+function rewardBauCua(state, p, result, rng) {
+  // mặt đặt cược lấy từ lúc bắt đầu lượt (p.bets); xúc xắc lắc ở đây
+  const dice = [0, 1, 2].map(() => pick(BAUCUA, rng));
+  const lines = p.bets.map((b) => {
+    const hits = dice.filter((d) => d === b.face).length;
+    return { face: b.face, amount: b.amount, hits, back: hits ? b.amount * (1 + hits) : 0 };
+  });
+  const back = lines.reduce((a, x) => a + x.back, 0);
+  state.money += back;
+  return { score: 0, gifts: back ? [`+${back} xu`] : [], dice, lines, hits: lines.reduce((a, x) => a + x.hits, 0), bet: p.bet, back, net: back - p.bet };
+}
+
 /** Kết thúc lượt đang chơi (đúng mã lượt) và nhận thưởng. */
 function finish(state, game, token, result = {}, now = Date.now(), rng = Math.random) {
   const mg = ensure(state, now);
@@ -165,9 +263,12 @@ function finish(state, game, token, result = {}, now = Date.now(), rng = Math.ra
   if (!p || p.game !== game || p.token !== token) return fail('Lượt chơi không hợp lệ hoặc đã kết thúc.');
   mg.pending = null;
   const r = game === 'bugs' ? rewardBugs(state, p, result || {}, rng)
-    : game === 'memory' ? rewardMemory(state, p, result || {}, rng) : rewardFish(state, p, result || {}, rng);
-  if (r.score > (mg.best[game] || 0) && game !== 'fish') mg.best[game] = r.score;
-  const text = r.gifts.length ? `Nhận: ${r.gifts.join(', ')}` : 'Không nhận được gì lần này.';
+    : game === 'memory' ? rewardMemory(state, p, result || {}, rng)
+      : game === 'blackjack' ? rewardBJ(state, p)
+        : game === 'baucua' ? rewardBauCua(state, p, result || {}, rng) : rewardFish(state, p, result || {}, rng);
+  if (r.score > (mg.best[game] || 0) && !['fish', 'blackjack', 'baucua'].includes(game)) mg.best[game] = r.score;
+  const text = r.bet ? (r.net > 0 ? `Thắng ${r.net} xu (nhận lại ${r.back})` : r.net === 0 ? `Hoà – nhận lại ${r.back} xu` : `Thua ${-r.net} xu`)
+    : r.gifts.length ? `Nhận: ${r.gifts.join(', ')}` : 'Không nhận được gì lần này.';
   state.log.unshift({ at: now, type: 'minigame', text: `${NAMES[game]}: ${text}` });
   if (state.log.length > 200) state.log.length = 200;
   return ok(text, { result: r });
@@ -183,4 +284,4 @@ function sellFish(state, id, all = false) {
   return ok(`Bán ${n} ${f.name}: +${f.price * n} xu`, { money: f.price * n });
 }
 
-module.exports = { LIMITS, NAMES, FISH, FISH_BY_ID, info, start, finish, sellFish, petBonus };
+module.exports = { LIMITS, NAMES, FISH, FISH_BY_ID, BAUCUA, BET, info, start, finish, move, sellFish, petBonus, bjScore };

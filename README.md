@@ -93,7 +93,9 @@ món chỉ nhận từ **Vòng quay may mắn**. Mua một lần, đổi món đ
 Cả mô hình và phông nền đều được vẽ bằng code và có chuyển động.
 
 Phòng chơi mặc định tắt, không tự tìm máy. Phòng LAN không dùng Internet; phòng Internet chỉ kết nối tới máy trung chuyển đã cấu hình. App chỉ gửi biệt danh, tin chat và
-dữ liệu hiển thị vườn; không gửi lịch hoạt động, nhật ký, kho đồ, đường dẫn hoặc thông tin máy.
+dữ liệu hiển thị vườn; không gửi lịch hoạt động, nhật ký, kho đồ, đường dẫn hoặc thông tin máy cho người chơi khác.
+Từ bản 0.3, vườn của mỗi người (kể cả giờ vườn hoạt động trong Cài đặt) được lưu trên máy chủ Supabase của nhóm
+để chống sửa chỉ số – chỉ máy chủ đọc được, người chơi khác không xem được. Game cần Internet để chơi.
 Nội dung trao đổi được mã hoá bằng mã mời riêng; địa chỉ IP và cổng kết nối vẫn hiện với người được mời
 và hệ thống mạng. Windows Firewall có thể cần cho phép app nhận kết nối trên mạng nội bộ.
 

@@ -767,3 +767,137 @@ end $$;
 revoke all on function public.vp_tree_marks(), public.vp_today(), public.vp_tree_get(uuid), public.vp_tree_brief(uuid, uuid),
   public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int), public.vp_tree_claim_top(uuid) from public, anon;
 grant execute on function public.vp_tree_state(uuid), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int), public.vp_tree_claim_top(uuid) to authenticated;
+
+-- =====================================================================================
+--  LƯU GAME TRÊN MÁY CHỦ (chống gian lận): tiền, cấp, đồ, cây… của mọi người chơi nằm ở bảng vp_saves.
+--  Chỉ Edge Function "game" (supabase/functions/game) đọc/ghi được, bằng khoá service_role của chính dự án
+--  (khoá này KHÔNG nằm trong game). Game trên máy người chơi chỉ gửi "muốn làm gì" (tưới ô 3, mua hạt…),
+--  máy chủ tự tính và trả kết quả → sửa file, sửa bộ nhớ hay gọi thẳng API đều không cộng được xu.
+--  Các hàm nhóm có cộng/trừ đồ (thăm vườn, Thần mộc, đấu trường) cũng chỉ Edge Function gọi được (qua vp_srv).
+-- =====================================================================================
+
+create table if not exists public.vp_saves (
+  user_id uuid primary key,
+  state jsonb not null,
+  version bigint not null default 1,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.vp_saves enable row level security;
+revoke all on public.vp_saves from anon, authenticated;
+
+create or replace function public.vp_save_get(p_uid uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('state', state, 'version', version) from vp_saves where user_id = p_uid;
+$$;
+
+-- ghi có kiểm tra phiên bản (2 yêu cầu cùng lúc không ghi đè nhau); p_version = 0 → tạo mới
+create or replace function public.vp_save_put(p_uid uuid, p_state jsonb, p_version bigint) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if p_uid is null or p_state is null or jsonb_typeof(p_state) <> 'object' then raise exception 'Dữ liệu lưu không hợp lệ.'; end if;
+  if octet_length(p_state::text) > 400000 then raise exception 'Dữ liệu lưu quá lớn.'; end if;
+  if coalesce(p_version, 0) = 0 then
+    insert into vp_saves (user_id, state) values (p_uid, p_state) on conflict (user_id) do nothing;
+    return found;
+  end if;
+  update vp_saves set state = p_state, version = version + 1, updated_at = now() where user_id = p_uid and version = p_version;
+  return found;
+end $$;
+
+-- máy chủ (Edge Function) gửi ảnh chụp vườn do chính nó tính, nhận các lượt thăm vườn chưa áp
+create or replace function public.vp_push_garden(p_group uuid, p_garden jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group); old jsonb; g jsonb := p_garden;
+begin
+  if g is not null then
+    if octet_length(g::text) > 24000 or jsonb_typeof(g -> 'slots') <> 'array' then raise exception 'Dữ liệu vườn không hợp lệ.'; end if;
+    select garden into old from vp_members where group_id = p_group and user_id = uid;
+    if g ? 'guard' and old ? 'guard' then
+      g := jsonb_set(g, '{guard,petSleepUntil}', to_jsonb(greatest(
+        coalesce((old #>> '{guard,petSleepUntil}')::bigint, 0), coalesce((g #>> '{guard,petSleepUntil}')::bigint, 0))));
+    end if;
+    update vp_members set garden = g, garden_at = now() where group_id = p_group and user_id = uid;
+  end if;
+  return (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'kind', kind, 'slot', slot, 'species', species,
+      'result', result, 'loot', loot, 'by', by_name, 'at', (extract(epoch from created_at) * 1000)::bigint) order by id), '[]'::jsonb)
+    from (select * from vp_visits where group_id = p_group and owner_id = uid and not applied order by id limit 50) v);
+end $$;
+
+-- game gọi vài giây 1 lần: báo có mặt, nhận thành viên, tin chat mới, vườn người đang xem, trận đấu, Thần mộc
+create or replace function public.vp_poll(p_group uuid, p_away boolean, p_since bigint, p_watch uuid) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare uid uuid := vp_require_member(p_group);
+begin
+  update vp_members set away = coalesce(p_away, false), last_seen = now() where group_id = p_group and user_id = uid;
+  return jsonb_build_object(
+    'now', vp_now_ms(),
+    'members', (select coalesce(jsonb_agg(jsonb_build_object('id', user_id, 'name', name, 'away', away,
+        'idle', extract(epoch from now() - last_seen)::int,
+        'keeper', user_id = (select keeper from vp_trees where group_id = p_group)) order by joined_at), '[]'::jsonb)
+      from vp_members where group_id = p_group),
+    'messages', (select coalesce(jsonb_agg(jsonb_build_object('id', id, 'by', user_id, 'name', name, 'body', body,
+        'at', (extract(epoch from created_at) * 1000)::bigint) order by id), '[]'::jsonb)
+      from (select * from vp_messages where group_id = p_group and id > coalesce(p_since, 0) order by id desc limit 50) m),
+    'garden', case when p_watch is null then null
+      else (select garden - 'bag' from vp_members where group_id = p_group and user_id = p_watch) end,
+    'duels', vp_my_duels(p_group, uid),
+    'tree', vp_tree_brief(p_group, uid)
+  );
+end $$;
+
+-- cổng duy nhất cho Edge Function: chạy hàm nhóm dưới danh nghĩa người chơi p_uid (đã xác thực ở Edge Function)
+create or replace function public.vp_srv(p_uid uuid, p_fn text, p_args jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare a jsonb := coalesce(p_args, '{}'::jsonb); r jsonb := 'null'::jsonb;
+begin
+  if p_uid is null then raise exception 'Thiếu người chơi.'; end if;
+  perform set_config('request.jwt.claim.sub', p_uid::text, true);
+  perform set_config('request.jwt.claims', jsonb_build_object('sub', p_uid, 'role', 'authenticated')::text, true);
+  case p_fn
+    when 'push' then r := vp_push_garden((a ->> 'group')::uuid, a -> 'garden');
+    when 'ack' then
+      perform vp_ack_events((a ->> 'group')::uuid, array(select x::bigint from jsonb_array_elements_text(coalesce(a -> 'ids', '[]'::jsonb)) x));
+    when 'visit' then r := vp_visit((a ->> 'group')::uuid, (a ->> 'owner')::uuid, a ->> 'kind', (a ->> 'slot')::int);
+    when 'tree_give' then r := vp_tree_give((a ->> 'group')::uuid, a ->> 'kind', coalesce((a ->> 'amount')::int, 0));
+    when 'tree_claim' then r := vp_tree_claim((a ->> 'group')::uuid, (a ->> 'milestone')::int);
+    when 'tree_claim_top' then r := vp_tree_claim_top((a ->> 'group')::uuid);
+    when 'duel_invite' then r := to_jsonb(vp_duel_invite((a ->> 'group')::uuid, (a ->> 'opponent')::uuid, a ->> 'pet', a ->> 'power'));
+    when 'duel_respond' then perform vp_duel_respond((a ->> 'duel')::uuid, coalesce((a ->> 'accept')::boolean, false), a ->> 'pet', a ->> 'power');
+    when 'duel_state' then r := vp_duel_state((a ->> 'duel')::uuid);
+    when 'duel_ack' then perform vp_duel_ack((a ->> 'duel')::uuid);
+    else raise exception 'Hàm không hợp lệ: %', p_fn;
+  end case;
+  return r;
+end $$;
+
+-- quyền: các hàm có cộng/trừ đồ chỉ còn Edge Function gọi được; game gọi vp_poll thay cho vp_sync
+revoke all on function public.vp_save_get(uuid), public.vp_save_put(uuid, jsonb, bigint), public.vp_push_garden(uuid, jsonb),
+  public.vp_srv(uuid, text, jsonb), public.vp_poll(uuid, boolean, bigint, uuid) from public, anon, authenticated;
+revoke execute on function public.vp_sync(uuid, boolean, jsonb, bigint, uuid), public.vp_ack_events(uuid, bigint[]),
+  public.vp_visit(uuid, uuid, text, int), public.vp_tree_give(uuid, text, int), public.vp_tree_claim(uuid, int),
+  public.vp_tree_claim_top(uuid), public.vp_duel_invite(uuid, uuid, text, text), public.vp_duel_respond(uuid, boolean, text, text),
+  public.vp_duel_ack(uuid) from authenticated;
+grant execute on function public.vp_poll(uuid, boolean, bigint, uuid) to authenticated;
+grant execute on function public.vp_save_get(uuid), public.vp_save_put(uuid, jsonb, bigint), public.vp_srv(uuid, text, jsonb) to service_role;
+
+-- ------------------------------------------------------------------ Admin: danh sách tài khoản (chỉ Edge Function gọi)
+create or replace function public.vp_admin_list() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(x order by x ->> 'updated' desc), '[]'::jsonb) from (
+    select jsonb_build_object(
+      'id', s.user_id,
+      'name', nullif(s.state #>> '{settings,ownerName}', ''),
+      'alias', (select m.name from vp_members m where m.user_id = s.user_id order by m.last_seen desc limit 1),
+      'online', exists (select 1 from vp_members m where m.user_id = s.user_id and m.last_seen > now() - interval '30 seconds'),
+      'money', coalesce((s.state ->> 'money')::bigint, 0),
+      'level', coalesce((s.state ->> 'level')::int, 1),
+      'exp', coalesce((s.state ->> 'exp')::bigint, 0),
+      'plays', coalesce(s.state #> '{minigames,plays}', '{}'::jsonb),
+      'playDay', s.state #>> '{minigames,day}',
+      'updated', (extract(epoch from s.updated_at) * 1000)::bigint,
+      'created', (extract(epoch from s.created_at) * 1000)::bigint) x
+    from vp_saves s order by s.updated_at desc limit 300) t;
+$$;
+revoke all on function public.vp_admin_list() from public, anon, authenticated;
+grant execute on function public.vp_admin_list() to service_role;

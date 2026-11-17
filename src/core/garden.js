@@ -9,6 +9,7 @@ const MG = require('./minigames');
 const C = require('./catalog');
 const S = require('./schedule');
 const D = require('./decor');
+const CL = require('./clock');
 
 const STATE_VERSION = 1;
 const LOG_MAX = 120;
@@ -285,6 +286,11 @@ const ADMIN = {
   },
   thirstAll(state) { state.slots.forEach((sl) => { if (sl.plant && !sl.plant.dead) sl.plant.water = 10; }); return 'Tất cả cây đang khát.'; },
   wakePet(state) { Object.values(state.pets.status).forEach((st) => { st.sleepUntil = 0; }); return 'Đã đánh thức pet.'; },
+  resetGames(state) {
+    const mg = state.minigames || (state.minigames = { day: null, plays: {}, pending: null, best: {} });
+    mg.plays = {};
+    return 'Đã đặt lại lượt chơi mini game hôm nay.';
+  },
   freeSpin(state) { state.wheel.freeDay = null; return 'Có thêm 1 lượt quay miễn phí.'; },
   resetDaily(state) { state.daily.last = null; return 'Có thể mở quà hằng ngày lại.'; },
   seeds(state) { state.unlocked.species.forEach((id) => { state.inventory.seeds[id] = (state.inventory.seeds[id] || 0) + 5; }); return '+5 hạt mỗi giống đã mở khoá.'; },
@@ -613,8 +619,8 @@ function unlock(state, kind, id) {
 // ---------------------------------------------------------------- quà hằng ngày
 
 function dayKey(ms) {
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const d = CL.parts(ms);
+  return `${d.y}-${String(d.mo + 1).padStart(2, '0')}-${String(d.d).padStart(2, '0')}`;
 }
 
 function dailyAvailable(state, now = Date.now()) {

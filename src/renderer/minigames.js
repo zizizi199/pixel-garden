@@ -11,8 +11,8 @@
   function stop() { if (stopFn) { const f = stopFn; stopFn = null; f(); } }
   function running() { return !!stopFn; }
 
-  async function begin(game) {
-    const r = await ctx.api.action({ type: 'gameStart', game });
+  async function begin(game, bet, bets) {
+    const r = await ctx.api.action({ type: 'gameStart', game, bet, bets });
     if (!r.ok) { ctx.toast(r.msg, true); ctx.Sound.play('error'); return null; }
     return r;
   }
@@ -262,5 +262,245 @@
     };
   }
 
-  window.MiniGames = { bugs, memory, fishing, stop, running };
+  /** Chọn mức cược (xu trong game). */
+  function betPicker(onChange) {
+    const box = el('div', 'bet-box');
+    const lim = (ctx.games && ctx.games.bet) || { min: 10, max: 500 };
+    let bet = Math.min(50, lim.max);
+    const label = el('span', 'bet-label');
+    const show = () => { label.innerHTML = `Cược: <b>${bet}</b> xu · đang có ${ctx.V().money} xu`; box.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', Number(c.dataset.v) === bet)); onChange && onChange(bet); };
+    for (const v of [10, 50, 100, 200, 500].filter((x) => x >= lim.min && x <= lim.max)) {
+      const c = el('button', 'chip', String(v)); c.dataset.v = v;
+      c.onclick = () => { bet = v; ctx.Sound.play('coin'); show(); };
+      box.appendChild(c);
+    }
+    box.appendChild(label);
+    show();
+    return { el: box, get: () => bet, refresh: show };
+  }
+
+  // ---------------------------------------------------------------- 4. Hoa 21 (Blackjack, cược xu)
+  const SUITS = ['hoa_hong', 'mai_vang', 'oai_huong', 'hoa_sen']; // 4 "chất" là 4 loài hoa
+  const RANK = (r) => (r === 1 ? 'A' : r === 11 ? 'J' : r === 12 ? 'Q' : r === 13 ? 'K' : String(r));
+  const FACE = { 11: '🪴', 12: '🐾', 13: '🏠' };
+  function cardEl(c, hidden) {
+    const d = el('div', `bj-card${hidden ? ' back' : ''}`);
+    if (hidden) { d.textContent = '✿'; return d; }
+    d.appendChild(el('b', '', RANK(c.r)));
+    if (FACE[c.r]) d.appendChild(el('span', 'bj-face', FACE[c.r]));
+    else {
+      const sp = ctx.SP[SUITS[c.s]];
+      if (sp) d.appendChild(ctx.canvasOf(ctx.Sprites.plant(sp, 'bloom')));
+    }
+    d.appendChild(el('b', 'rev', RANK(c.r)));
+    return d;
+  }
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
+  /** Bay 1 lá từ bộ bài tới hàng bài (úp hoặc ngửa). */
+  async function flyCard(deckEl, row, card, hidden) {
+    const target = cardEl(card, hidden);
+    target.style.visibility = 'hidden';
+    row.appendChild(target);
+    const from = deckEl.getBoundingClientRect(); const to = target.getBoundingClientRect();
+    const fly = cardEl(card, true);
+    fly.classList.add('bj-fly');
+    Object.assign(fly.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${to.width}px`, height: `${to.height}px` });
+    document.body.appendChild(fly);
+    ctx.Sound.play('click');
+    await wait(20);
+    fly.style.transform = `translate(${to.left - from.left}px, ${to.top - from.top}px) rotate(${hidden ? 0 : 360}deg)`;
+    await wait(380);
+    fly.remove();
+    target.style.visibility = '';
+    if (!hidden) target.classList.add('flip-in');
+    return target;
+  }
+
+  async function blackjack(c) {
+    ctx = c; stop();
+    const body = frameView('🃏 Hoa 21 – cược xu, rút gần 21 nhất mà không quá 21. Thắng ×2, Blackjack ×2.5, hoà trả lại cược. Pet của bạn làm nhà cái (rút tới 17).');
+    const bets = betPicker(); body.appendChild(bets.el);
+    const table = el('div', 'bj-table'); body.appendChild(table);
+    const dealerRow = el('div', 'bj-row'); const playerRow = el('div', 'bj-row');
+    const dealerInfo = el('div', 'bj-info'); const playerInfo = el('div', 'bj-info');
+    const pet = ctx.V().pet && ctx.PET[ctx.V().pet.id];
+    const dealerName = pet ? `${pet.name} (nhà cái)` : 'Nhà cái';
+    const petBox = el('div', 'bj-pet');
+    if (pet) petBox.appendChild(ctx.canvasOf(ctx.Sprites.pet(pet, 'idle')));
+    const deck = el('div', 'bj-deck'); for (let k = 0; k < 4; k++) deck.appendChild(el('i'));
+    table.append(petBox, dealerInfo, dealerRow, playerInfo, playerRow, deck);
+    const actions = el('div', 'bj-actions'); body.appendChild(actions);
+    const hit = el('button', 'primary', '➕ Rút'); const stand = el('button', '', '✋ Dằn');
+    const again = el('button', 'primary', '🃏 Đặt cược & chia bài'); const out = el('button', '', 'Về vườn');
+    out.onclick = () => { stop(); ctx.exitTall(); };
+    let token = null; let busy = false; let alive = true;
+    let shownP = 0; let shownD = 0; let holeEl = null; // lá úp của nhà cái
+    const left = () => ((ctx.V().minigames || {}).blackjack || { left: 0 }).left;
+    const scoreOf = (cards) => { let t = 0; let a = 0; for (const x of cards) { if (x.r === 1) { a++; t += 11; } else t += Math.min(10, x.r); } while (t > 21 && a) { t -= 10; a--; } return t; };
+
+    /** Hiện dần các lá mới (bay từ bộ bài). done = lật lá úp và nhà cái rút tiếp. */
+    async function show(v, done) {
+      if (shownP === 0 && shownD === 0) { // chia lần đầu: người – nhà cái – người – nhà cái (úp)
+        await flyCard(deck, playerRow, v.player[0]); shownP = 1;
+        await flyCard(deck, dealerRow, v.dealer[0]); shownD = 1;
+        await flyCard(deck, playerRow, v.player[1]); shownP = 2;
+        holeEl = await flyCard(deck, dealerRow, null, true);
+      }
+      while (alive && shownP < v.player.length) { await flyCard(deck, playerRow, v.player[shownP]); shownP++; playerInfo.textContent = `Bạn: ${scoreOf(v.player.slice(0, shownP))}`; }
+      playerInfo.textContent = `Bạn: ${v.playerScore}`;
+      if (!done) { dealerInfo.textContent = `${dealerName}: ?`; return; }
+      if (holeEl) { // lật lá úp
+        const face = cardEl(v.dealer[1]); face.classList.add('flip-in');
+        holeEl.replaceWith(face); holeEl = null; shownD = 2; ctx.Sound.play('click');
+        dealerInfo.textContent = `${dealerName}: ${scoreOf(v.dealer.slice(0, 2))}`;
+        await wait(450);
+      }
+      while (alive && shownD < v.dealer.length) { // nhà cái rút từ bộ bài
+        await flyCard(deck, dealerRow, v.dealer[shownD]); shownD++;
+        dealerInfo.textContent = `${dealerName}: ${scoreOf(v.dealer.slice(0, shownD))}`;
+        await wait(250);
+      }
+      dealerInfo.textContent = `${dealerName}: ${v.dealerScore}`;
+    }
+    const showEnd = (r) => {
+      token = null;
+      const res = el('div', 'game-result');
+      const t = r.result && r.result.title ? r.result.title : '';
+      res.innerHTML = `<b>${ctx.esc(t)}</b><br>${ctx.esc(r.msg)}<br><small>Còn ${left()} ván hôm nay · đang có ${ctx.V().money} xu</small><br>`;
+      again.textContent = '🔁 Ván mới'; again.disabled = left() <= 0;
+      res.append(again, out);
+      body.appendChild(res);
+      bets.el.classList.remove('locked');
+      ctx.Sound.play(['blackjack', 'win'].includes(r.outcome) ? 'levelup' : r.outcome === 'push' ? 'coin' : 'error');
+    };
+    async function deal() {
+      if (busy) return;
+      body.querySelectorAll('.game-result').forEach((x) => x.remove());
+      busy = true;
+      const r = await begin('blackjack', bets.get());
+      if (!r) { busy = false; actions.innerHTML = ''; actions.append(again, out); return; }
+      bets.el.classList.add('locked'); setTimeout(() => bets.refresh(), 50);
+      dealerRow.innerHTML = ''; playerRow.innerHTML = ''; shownP = 0; shownD = 0; holeEl = null;
+      actions.innerHTML = '';
+      await show(r, !!r.done);
+      busy = false;
+      if (r.done) { showEnd(r); return; }
+      token = r.token; actions.append(hit, stand);
+    }
+    async function mv(action) {
+      if (!token || busy) return;
+      busy = true; hit.disabled = stand.disabled = true;
+      const r = await ctx.api.action({ type: 'gameMove', game: 'blackjack', token, move: action });
+      if (!r.ok) { busy = false; hit.disabled = stand.disabled = false; ctx.toast(r.msg, true); return; }
+      await show(r, !!r.done);
+      busy = false; hit.disabled = stand.disabled = false;
+      if (r.done) { actions.innerHTML = ''; showEnd(r); }
+    }
+    hit.onclick = () => mv('hit'); stand.onclick = () => mv('stand');
+    again.onclick = deal;
+    stopFn = () => { token = null; alive = false; document.querySelectorAll('.bj-fly').forEach((x) => x.remove()); };
+    actions.append(again, out);
+    dealerInfo.textContent = `${dealerName}: chờ chia bài`; playerInfo.textContent = 'Bạn: chọn mức cược ở trên rồi chia bài';
+  }
+
+  // ---------------------------------------------------------------- 5. Bầu cua tôm cá (cược xu, mặt xúc xắc là pet trong cửa hàng)
+  async function baucua(c) {
+    ctx = c; stop();
+    const faces = (ctx.games && ctx.games.baucua) || [];
+    const name = (id) => (ctx.PET[id] ? ctx.PET[id].name : id);
+    const pic = (id, cls) => { const cv = ctx.canvasOf(ctx.Sprites.pet(ctx.PET[id], 'idle')); if (cls) cv.className = cls; return cv; };
+    const body = frameView('🎲 Bầu cua thú cưng – chọn mệnh giá rồi bấm vào con muốn đặt (tối đa 3 đồng xu, đặt thêm sẽ bỏ đồng đặt đầu tiên). Ra 1 mặt ×2, 2 mặt ×3, 3 mặt ×4.');
+    const coins = []; // [{ face, amount }] theo thứ tự đặt
+    let showInfo = () => {};
+    const chips = betPicker(() => showInfo('')); body.appendChild(chips.el);
+    const wrapB = el('div', 'bc-wrap'); body.appendChild(wrapB);
+    const board = el('div', 'bc-board'); wrapB.appendChild(board);
+    const plate = el('div', 'bc-plate'); wrapB.appendChild(plate);
+    const side = el('div', 'bc-side'); wrapB.appendChild(side);
+    const info = el('div', 'bc-info'); const roll = el('button', 'primary', '🎲 Lắc'); const clear = el('button', '', '↺ Bỏ hết xu');
+    side.append(info, roll, clear);
+    let rolling = false;
+    // Đĩa + bát: 3 viên xúc xắc 3D (6 mặt = 6 con pet), gieo lăn trên đĩa rồi dừng đúng mặt máy chủ trả về.
+    plate.classList.add('bc-dish');
+    const bowl = el('div', 'bc-bowl'); plate.appendChild(bowl);
+    const SIDE = ['front', 'back', 'right', 'left', 'top', 'bottom'];
+    const FACE_ROT = { front: [0, 0], back: [0, 180], right: [0, -90], left: [0, 90], top: [-90, 0], bottom: [90, 0] };
+    const dice = [0, 1, 2].map((n) => {
+      const slot = el('div', `bc-die3d d${n}`); const cube = el('div', 'bc-cube');
+      faces.forEach((id, k) => { const f = el('div', `bc-face ${SIDE[k]}`); f.appendChild(pic(id)); cube.appendChild(f); });
+      slot.appendChild(cube); plate.appendChild(slot);
+      cube.style.transform = `rotateX(${-20 + n * 15}deg) rotateY(${25 - n * 20}deg)`;
+      return { slot, cube, rx: 0, ry: 0 };
+    });
+    const sideOf = (id) => SIDE[Math.max(0, faces.indexOf(id))];
+    /** Gieo: xúc xắc tung lên rồi lăn trên đĩa, dừng ở mặt `id`. */
+    function throwDie(d, id, n) {
+      const [fx, fy] = FACE_ROT[sideOf(id)];
+      d.rx = Math.ceil(d.rx / 360) * 360 + 720 + 360 * n + fx; // thêm vài vòng lăn
+      d.ry = Math.ceil(d.ry / 360) * 360 + 1080 - 360 * n + fy;
+      d.slot.classList.remove('land'); void d.slot.offsetWidth; d.slot.classList.add('land');
+      d.cube.style.transition = `transform ${1.15 + n * 0.18}s cubic-bezier(.15,.65,.25,1)`;
+      d.cube.style.transform = `rotateX(${d.rx}deg) rotateY(${d.ry}deg)`;
+    }
+    const left = () => ((ctx.V().minigames || {}).baucua || { left: 0 }).left;
+    const total = () => coins.reduce((a, x) => a + x.amount, 0);
+    const cells = {};
+    function drawCoins() {
+      for (const [id, cell] of Object.entries(cells)) {
+        const stack = cell.querySelector('.bc-coins'); stack.innerHTML = '';
+        coins.forEach((x, n) => { if (x.face === id) { const coin = el('span', `bc-coin${n === 0 && coins.length === 3 ? ' oldest' : ''}`, String(x.amount)); stack.appendChild(coin); } });
+        cell.classList.toggle('on', coins.some((x) => x.face === id));
+      }
+    }
+    showInfo = (msg) => {
+      info.innerHTML = `${msg ? `${msg}<br>` : ''}${coins.length ? `Đặt ${coins.length}/3 đồng · tổng <b>${total()}</b> xu` : 'Chọn mệnh giá rồi bấm vào con để đặt xu'}<br>Còn <b>${left()}</b> lượt hôm nay · có ${ctx.V().money} xu`;
+      roll.disabled = !coins.length || left() <= 0 || rolling || ctx.V().money < total();
+      clear.disabled = !coins.length || rolling;
+    };
+    for (const id of faces) {
+      if (!ctx.PET[id]) continue;
+      const b = el('button', 'bc-cell'); b.dataset.k = id;
+      b.append(pic(id, 'bc-pet'), el('small', '', name(id)), el('div', 'bc-coins'));
+      b.onclick = () => {
+        if (rolling) return;
+        board.querySelectorAll('.bc-cell').forEach((x) => x.classList.remove('hit'));
+        coins.push({ face: id, amount: chips.get() });
+        if (coins.length > 3) coins.shift(); // quá 3 đồng: bỏ đồng đặt đầu tiên
+        ctx.Sound.play('coin'); drawCoins(); showInfo('');
+      };
+      cells[id] = b; board.appendChild(b);
+    }
+    clear.onclick = () => { coins.length = 0; drawCoins(); showInfo(''); };
+    showInfo('');
+    roll.onclick = async () => {
+      if (!coins.length || rolling) return;
+      rolling = true; showInfo('');
+      board.querySelectorAll('.bc-cell').forEach((x) => x.classList.remove('hit'));
+      dice.forEach((d) => d.slot.classList.remove('hit'));
+      const r = await begin('baucua', 0, coins.map((x) => ({ ...x })));
+      if (!r) { rolling = false; showInfo(''); return; }
+      // 1) úp bát lên đĩa và lắc  2) mở bát, xúc xắc lăn ra và dừng đúng mặt
+      dice.forEach((d) => d.slot.classList.remove('hit'));
+      plate.classList.add('covered'); ctx.Sound.play('click');
+      await new Promise((ok) => setTimeout(ok, 350));
+      plate.classList.add('shake'); ctx.Sound.play('water');
+      const res = await ctx.api.action({ type: 'gameFinish', game: 'baucua', token: r.token, result: {} });
+      const out = res.ok ? res.result : { dice: [], lines: [], hits: 0 };
+      setTimeout(() => {
+        plate.classList.remove('shake'); plate.classList.remove('covered'); ctx.Sound.play('open');
+        out.dice.forEach((k, n) => throwDie(dice[n], k, n));
+      }, 900);
+      setTimeout(() => {
+        const bet = new Set(coins.map((x) => x.face));
+        out.dice.forEach((k, n) => dice[n].slot.classList.toggle('hit', bet.has(k)));
+        board.querySelectorAll('.bc-cell').forEach((x) => x.classList.toggle('hit', out.dice.includes(x.dataset.k) && bet.has(x.dataset.k)));
+        ctx.Sound.play(out.net > 0 ? 'levelup' : out.back ? 'coin' : 'error');
+        rolling = false; chips.refresh();
+        showInfo(`${out.net > 0 ? '🎉' : out.back ? '🙂' : '😿'} ${ctx.esc(res.msg)}`);
+      }, 900 + 1550);
+    };
+    stopFn = () => {};
+  }
+
+  window.MiniGames = { bugs, memory, fishing, blackjack, baucua, stop, running };
 }());

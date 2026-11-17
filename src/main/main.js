@@ -5,6 +5,8 @@
  */
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 const { pathToFileURL } = require('url');
 const {
   app, BrowserWindow, net, ipcMain, screen, Tray, Menu, nativeImage, Notification, globalShortcut, safeStorage,
@@ -15,7 +17,9 @@ const G = require('../core/garden');
 const MG = require('../core/minigames');
 const store = require('../core/store');
 const D = require('../core/decor');
-const { LanRoom, publicGarden } = require('./lan');
+const A = require('../core/actions');
+const { LanRoom } = require('./lan');
+const { publicGarden } = require('../core/snapshot');
 const { GroupRoom, validSupabase } = require('./group');
 const { verifyAdmin, KEY_FILE_NAME } = require('./admin-gate');
 
@@ -27,6 +31,7 @@ const TAB_W = 310;
 const TAB_H = 34;
 const COMPACT_W = 980;
 const TICK_MS = 20 * 1000;
+const SERVER_TICK_MS = 60 * 1000; // nhịp đồng bộ với máy chủ trò chơi (tua vườn, nhận lượt tưới hộ / hái trộm)
 
 let win = null;
 let tray = null;
@@ -39,6 +44,16 @@ let lastTodo = -1;
 let lan = null;
 let lanFile = '';
 let lanSaveQueue = Promise.resolve();
+// Chế độ máy chủ: khi bản build có cấu hình Supabase, vườn/tiền/đồ nằm trên máy chủ (server/game.js).
+// `state` lúc đó chỉ là bản sao máy chủ gửi về để vẽ vườn; mọi hành động gửi lên máy chủ tính.
+let remote = false;
+let cacheFile = '';
+let cacheDirty = false;
+let serverOk = false; // đã nhận state từ máy chủ ít nhất 1 lần
+let serverError = '';
+let initSettings = null; // cài đặt của save cũ trên máy: gửi kèm lần đầu tạo vườn trên máy chủ
+// Khoá bí mật Admin (scripts\tao-khoa-admin.cmd) – chỉ có trên máy admin, dùng ký lệnh Admin gửi máy chủ.
+const ADMIN_PEM = path.join(os.homedir(), '.vuon-pixel-admin', 'admin-private.pem');
 const DEV = !app.isPackaged; // bản chạy từ mã nguồn: tự tải lại khi sửa code
 // Admin chỉ bật trên máy có file khoá do scripts\tao-khoa-admin.cmd tạo (ký bằng khoá bí mật của người phát triển).
 const ADMIN = verifyAdmin(require('../../package.json').adminPublicKey, path.join(app.getPath('appData'), KEY_FILE_NAME));
@@ -110,12 +125,101 @@ function push() {
 }
 
 function persist() {
+  if (remote) { saveCache(); return; }
   try {
     store.save(saveFile, state, { cipher: saveCipher });
     dirty = false;
   } catch (e) {
     console.error('Không lưu được game:', e);
   }
+}
+
+// Bản sao để mở app khi mất mạng vẫn thấy vườn (không có giá trị gì: máy chủ không đọc file này).
+function saveCache() {
+  if (!cacheDirty || !serverOk) return;
+  try {
+    fs.writeFileSync(`${cacheFile}.tmp`, JSON.stringify(state));
+    fs.renameSync(`${cacheFile}.tmp`, cacheFile);
+    cacheDirty = false;
+  } catch (e) { console.error('Không lưu được bản sao vườn:', e.message); }
+}
+
+function loadCache() {
+  try { return G.migrate(JSON.parse(fs.readFileSync(cacheFile, 'utf8')), Date.now()); } catch (_) { return null; }
+}
+
+/** Nhận state mới từ máy chủ trò chơi. */
+function applyServer(res) {
+  if (!res || !res.state || typeof res.state !== 'object') return;
+  const prevPos = state && state.settings.position;
+  const prevWidth = state && state.settings.barWidth;
+  state = G.migrate(res.state, Date.now());
+  G.advance(state, Date.now());
+  serverOk = true; serverError = ''; cacheDirty = true;
+  if (win && (state.settings.position !== prevPos || state.settings.barWidth !== prevWidth)) applyLayout(mode);
+  push(); updateTray();
+}
+
+async function serverCall(body) {
+  try {
+    const res = await lan.game(serverOk || !initSettings ? body : { ...body, init: { settings: initSettings } });
+    if (res.state) initSettings = null;
+    return res;
+  } catch (e) {
+    serverError = e.message;
+    throw e;
+  }
+}
+
+let serverTicking = null;
+function serverTick() {
+  if (!remote || serverTicking) return serverTicking;
+  serverTicking = serverCall({ a: { type: 'tick' } })
+    .catch((e) => { console.error('Đồng bộ máy chủ lỗi:', e.message); })
+    .finally(() => { serverTicking = null; });
+  return serverTicking;
+}
+
+function adminEnvelope(a) {
+  let pem;
+  try { pem = fs.readFileSync(ADMIN_PEM, 'utf8'); } catch (_) { throw new Error('Thiếu khoá bí mật Admin trên máy này (chạy scripts\\tao-khoa-admin.cmd).'); }
+  const payload = JSON.stringify({ uid: lan.config.auth && lan.config.auth.uid, ts: Date.now(), a });
+  return { payload, sig: crypto.sign(null, Buffer.from(payload), crypto.createPrivateKey(pem)).toString('base64') };
+}
+
+/** Hành động từ giao diện / khay: máy chủ tính (chế độ Supabase) hoặc tính tại máy (bản chưa cấu hình Supabase). */
+async function doAction(a) {
+  if (!a || typeof a.type !== 'string') return { ok: false, msg: 'Hành động không hợp lệ.' };
+  let r;
+  if (!remote && (a.type === 'adminList' || a.type === 'adminUser')) return { ok: false, msg: 'Bảng tài khoản chỉ có khi game lưu trên máy chủ.' };
+  if (remote) {
+    try {
+      if (A.ADMIN_TYPES.has(a.type)) {
+        if (!ADMIN) return { ok: false, msg: 'Admin đã tắt.' };
+        await lan.accessToken();
+        r = (await serverCall({ admin: adminEnvelope(a) })).r;
+      } else {
+        r = (await serverCall({ a })).r;
+      }
+    } catch (e) {
+      return { ok: false, msg: e.status ? e.message : `Không kết nối được máy chủ trò chơi – kiểm tra Internet rồi thử lại. (${e.message})` };
+    }
+    r = r && typeof r === 'object' ? r : { ok: false, msg: 'Không thực hiện được.' };
+  } else {
+    const out = A.run(state, a, { now: Date.now(), rng: Math.random, admin: ADMIN });
+    state = out.state; r = out.r;
+    if (r.ok) { dirty = true; persist(); }
+    push(); updateTray();
+  }
+  if (r.ok && a.type === 'settings') applyWindowSettings(a.patch || {});
+  return r;
+}
+
+function applyWindowSettings(patch) {
+  const s = state.settings;
+  if ('alwaysOnTop' in patch && win) win.setAlwaysOnTop(s.alwaysOnTop);
+  if ('autoStart' in patch && app.isPackaged) app.setLoginItemSettings({ openAtLogin: s.autoStart });
+  applyLayout(mode);
 }
 
 async function loadLanConfig() {
@@ -151,24 +255,6 @@ function handleLanVisit({ kind, slot, by, away }) {
   return result;
 }
 
-// Nhóm Supabase: ảnh chụp vườn gửi lên máy chủ = phần hiển thị + phần thưởng/khả năng chặn trộm từng ô.
-function groupGarden() {
-  const pub = publicGarden(G.view(state));
-  const rg = G.remoteGuard(state);
-  pub.slots.forEach((s, i) => Object.assign(s, rg.slots[i] || {}));
-  pub.guard = rg.guard;
-  pub.pet = state.pets.active || null;
-  pub.bag = G.arenaBag(state); // món có thể mất khi thua ở Đấu trường (server không trả phần này cho người khác)
-  return pub;
-}
-
-// Lượt tưới hộ / hái trộm máy chủ nhóm đã xử lý (có thể lúc mình tắt máy) → áp vào vườn.
-function applyGroupEvents(events) {
-  G.advance(state, Date.now());
-  for (const ev of events) G.applyRemoteVisit(state, ev);
-  persist(); push(); updateTray();
-}
-
 function applyLanReward(loot) {
   if (!loot || !Number.isInteger(loot.money) || !Number.isInteger(loot.exp)
     || loot.money < 0 || loot.money > 10000 || loot.exp < 0 || loot.exp > 10000) throw new Error('Phần thưởng LAN không hợp lệ.');
@@ -194,7 +280,9 @@ function notify(events) {
 }
 
 let giftNoticeDay = null;
+let lastServerTick = 0;
 function tick() {
+  if (remote && Date.now() - lastServerTick >= SERVER_TICK_MS - 1000) { lastServerTick = Date.now(); serverTick(); }
   const events = G.advance(state, Date.now());
   const today = G.dayKey(Date.now());
   if (state.settings.notify && G.dailyAvailable(state) && giftNoticeDay !== today && Notification.isSupported()) {
@@ -204,91 +292,16 @@ function tick() {
   // Khi mở app sau thời gian dài, chỉ báo các sự kiện gần đây (tránh spam).
   const recent = events.filter((e) => Date.now() - e.at < 10 * 60 * 1000);
   notify(recent);
-  if (events.length) dirty = true;
+  if (events.length) { dirty = true; cacheDirty = true; }
   push();
   updateTray();
 }
 
 // ---------------------------------------------------------------- hành động từ giao diện
-
-const ACTIONS = {
-  plant: (a) => G.plantSeed(state, a.slot, a.species),
-  water: (a) => G.water(state, a.slot),
-  waterAll: () => G.waterAll(state),
-  harvest: (a) => G.harvest(state, a.slot),
-  fertilize: (a) => G.fertilize(state, a.slot, a.item),
-  equipPower: (a) => G.equipPower(state, a.id),
-  gameStart: (a) => MG.start(state, a.game),
-  gameFinish: (a) => MG.finish(state, a.game, a.token, a.result && typeof a.result === 'object' ? a.result : {}),
-  sellFish: (a) => MG.sellFish(state, a.id, a.all === true),
-  remove: (a) => G.removePlant(state, a.slot),
-  clearTheft: (a) => G.clearTheft(state, a.slot),
-  buy: (a) => G.buy(state, a.kind, a.id, a.qty),
-  equipScene: (a) => G.equipScene(state, a.kind, a.id),
-  unlock: (a) => G.unlock(state, a.kind, a.id),
-  daily: () => G.claimDaily(state),
-  spin: (a) => G.spinWheel(state, a.count === 10 ? 10 : 1),
-  ackSpin: () => G.ackSpin(state),
-  buySlot: () => G.buySlot(state),
-  placePot: (a) => G.placePot(state, a.slot, a.pot),
-  placeDecor: (a) => G.placeDecor(state, a.slot, a.pos, a.id),
-  placeHouseDecor: (a) => G.placeHouseDecor(state, a.pos, a.id),
-  upgradeHouse: () => G.upgradeHouse(state),
-  setPet: (a) => G.setPet(state, a.id),
-  settings: (a) => updateSettings(a.patch || {}),
-  resetShift: () => resetShift(),
-  admin: (a) => (ADMIN ? G.admin(state, a) : { ok: false, msg: 'Admin đã tắt.' }),
-  adminReset: () => { if (!ADMIN) return { ok: false, msg: 'Admin đã tắt.' }; const s0 = state.settings; state = G.createState(); state.settings = s0; return { ok: true, msg: 'Đã chơi lại từ đầu.' }; },
-};
-
-const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Bảng hành động: src/core/actions.js (dùng chung với máy chủ). Xem doAction() ở trên.
 
 function updateSettings(patch) {
-  G.advance(state, Date.now()); // tính xong theo lịch cũ trước khi đổi lịch
-  const s = state.settings;
-  if (patch.schedule) {
-    const sc = { ...s.schedule, ...patch.schedule };
-    sc.lunch = { ...s.schedule.lunch, ...(patch.schedule.lunch || {}) };
-    const times = [sc.start, sc.end, sc.lunch.start, sc.lunch.end];
-    if (!times.every((t) => TIME_RE.test(t))) return { ok: false, msg: 'Giờ phải có dạng HH:MM.' };
-    if (sc.end <= sc.start) return { ok: false, msg: 'Giờ kết thúc phải sau giờ bắt đầu.' };
-    if (!Array.isArray(sc.workdays) || !sc.workdays.length) return { ok: false, msg: 'Chọn ít nhất 1 ngày vườn hoạt động.' };
-    s.schedule = sc;
-  }
-  for (const k of ['ownerName', 'notify', 'usePacks', 'music', 'sfx']) if (k in patch) s[k] = k === 'ownerName' ? String(patch[k]).slice(0, 24) : !!patch[k];
-  if ('petTalk' in patch) s.petTalk = !!patch.petTalk;
-  if (['it', 'vua', 'nhieu'].includes(patch.talkRate)) s.talkRate = patch.talkRate;
-  if ('volume' in patch) s.volume = Math.max(0, Math.min(100, Number(patch.volume) || 0));
-  if (patch.position && ['top', 'bottom'].includes(patch.position)) s.position = patch.position;
-  if (patch.barWidth && ['full', 'compact'].includes(patch.barWidth)) s.barWidth = patch.barWidth;
-  if ('alwaysOnTop' in patch) {
-    s.alwaysOnTop = !!patch.alwaysOnTop;
-    if (win) win.setAlwaysOnTop(s.alwaysOnTop);
-  }
-  if ('autoStart' in patch) {
-    s.autoStart = !!patch.autoStart;
-    if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: s.autoStart });
-  }
-  applyLayout(mode);
-  return { ok: true, msg: 'Đã lưu cài đặt.' };
-}
-
-/**
- * Đặt lại giờ làm bắt đầu từ bây giờ, giữ nguyên độ dài ca (vd 8:00–17:00 = 9 tiếng → 9:30–18:30).
- * Dùng khi hôm nay đi làm lệch giờ. Giờ nghỉ trưa giữ nguyên. Đổi lại được trong Cài đặt.
- */
-function resetShift() {
-  const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-  const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-  const sc = state.settings.schedule;
-  const len = toMin(sc.end) - toMin(sc.start);
-  const d = new Date();
-  const start = d.getHours() * 60 + d.getMinutes();
-  const end = Math.min(start + len, 23 * 60 + 59);
-  if (end - start < 30) return { ok: false, msg: 'Đã quá muộn trong ngày để bắt đầu lại.' };
-  const workdays = sc.workdays.includes(d.getDay()) ? sc.workdays : [...sc.workdays, d.getDay()].sort();
-  const r = updateSettings({ schedule: { start: fmt(start), end: fmt(end), workdays } });
-  return r.ok ? { ok: true, msg: 'Vườn bắt đầu tính thời gian từ bây giờ.' } : r;
+  doAction({ type: 'settings', patch }).catch(() => {});
 }
 
 // ---------------------------------------------------------------- asset pack
@@ -356,8 +369,8 @@ function buildTray() {
     { label: 'Thu gọn', click: () => applyLayout('collapsed') },
     { label: 'Ẩn hẳn', click: () => win.hide() },
     { type: 'separator' },
-    { label: 'Đặt ở cạnh dưới', click: () => { updateSettings({ position: 'bottom' }); push(); } },
-    { label: 'Đặt ở cạnh trên', click: () => { updateSettings({ position: 'top' }); push(); } },
+    { label: 'Đặt ở cạnh dưới', click: () => updateSettings({ position: 'bottom' }) },
+    { label: 'Đặt ở cạnh trên', click: () => updateSettings({ position: 'top' }) },
     { type: 'separator' },
     { label: 'Mở thư mục dữ liệu', click: () => require('electron').shell.openPath(app.getPath('userData')) },
     { label: 'Thoát', click: () => app.quit() },
@@ -387,7 +400,7 @@ function watchSource() {
     } catch (e) { console.error('Không theo dõi được', dir, e.message); }
   };
   on('renderer', () => { if (win) win.webContents.reloadIgnoringCache(); });
-  const restart = () => { persist(); app.relaunch(); app.exit(0); };
+  const restart = () => { cacheDirty = true; persist(); app.relaunch(); app.exit(0); };
   on('core', restart);
   on('main', restart);
 }
@@ -405,6 +418,7 @@ app.whenReady().then(async () => {
   saveFile = path.join(userData, saveCipher ? 'save.dat' : 'save.json');
   state = store.load(saveFile, Date.now(), { cipher: saveCipher, legacy: saveCipher ? path.join(userData, 'save.json') : null });
   G.advance(state, Date.now());
+  cacheFile = path.join(userData, 'server-copy.json');
   lanFile = path.join(app.getPath('userData'), 'lan.sec');
   let lanConfig = {};
   let lanError = '';
@@ -419,16 +433,17 @@ app.whenReady().then(async () => {
   const changed = (v) => { if (win) win.webContents.send('lan-state', v); };
   if (validSupabase(supabase)) {
     // net.fetch dùng mạng của Chromium → tự đi qua proxy của Windows giống trình duyệt.
-    lan = new GroupRoom({ config: lanConfig, saveConfig: saveLanConfig, supabase, fetch: (u, o) => net.fetch(u, o),
-      getGarden: groupGarden, applyEvents: applyGroupEvents, applyReward: applyLanReward, changed,
-      getArena: () => ({ pet: state.pets.active || null, power: state.arena.power }),
-      applyArena: ({ gain, lose, prize, opponent }) => {
-        if (!gain && !lose) return;
-        G.arenaTransfer(state, prize, gain, String(opponent || 'đối thủ').slice(0, 24));
-        persist(); push(); updateTray();
-      } });
+    lan = new GroupRoom({ config: lanConfig, saveConfig: saveLanConfig, supabase, fetch: (u, o) => net.fetch(u, o), changed, applyServer });
     lan.error = lanError;
     if (!lanError) lan.start();
+    // Vườn lưu trên máy chủ: lúc mở app hiện bản sao gần nhất, rồi lấy bản thật từ máy chủ.
+    remote = !lanError;
+    if (remote) {
+      initSettings = state.settings; // chỉ dùng nếu máy chủ chưa có vườn của mình (lần đầu chơi bản này)
+      const fresh = G.createState(Date.now()); fresh.settings = state.settings; // save cũ trên máy không còn dùng
+      state = loadCache() || fresh;
+      G.advance(state, Date.now());
+    }
   } else {
     lan = new LanRoom({ config: lanConfig, saveConfig: saveLanConfig, relayUrl,
       getGarden: () => publicGarden(G.view(state)), handleVisit: handleLanVisit, applyReward: applyLanReward, changed });
@@ -436,23 +451,15 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle('init', () => ({
-    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, powers: C.POWERS, fish: MG.FISH, games: { limits: MG.LIMITS, names: MG.NAMES }, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
+    catalog: { species: C.SPECIES, pots: C.POTS, potDecor: D.POT_DECOR, potSlots: D.POT_SLOTS, slotNames: D.SLOT_NAMES, houseLevels: D.HOUSE_LEVELS, houseDecor: D.HOUSE_DECOR, houseSlots: D.HOUSE_SLOTS, houseSlotNames: D.HOUSE_SLOT_NAMES, sceneObjects: D.SCENE_OBJECTS, backgrounds: D.BACKGROUNDS, items: C.ITEMS, powers: C.POWERS, fish: MG.FISH, games: { limits: MG.LIMITS, names: MG.NAMES, bet: MG.BET, baucua: MG.BAUCUA }, pets: C.PETS, petTiers: C.PET_TIERS, tiers: C.TIERS, wheel: { ...C.RULES.wheel, pool: G.wheelPool() }, rules: { thirstyAt: C.RULES.thirstyAt, waterBlockAbove: C.RULES.waterBlockAbove, maxSlots: C.RULES.maxSlots } },
     view: G.view(state),
     packs: scanPacks(),
     lan: lan.status(),
+    server: remote ? { ok: serverOk, error: serverError } : null,
     mode: mode === 'panel' ? (applyLayout('bar'), 'bar') : mode,
     dev: ADMIN,
   }));
-  ipcMain.handle('action', (_e, a) => {
-    const fn = a && ACTIONS[a.type];
-    if (!fn) return { ok: false, msg: 'Hành động không hợp lệ.' };
-    G.advance(state, Date.now());
-    const r = fn(a);
-    if (r.ok) { dirty = true; persist(); }
-    push();
-    updateTray();
-    return r;
-  });
+  ipcMain.handle('action', (_e, a) => doAction(a));
   ipcMain.on('layout', (_e, m) => { if (['collapsed', 'bar', 'panel', 'arena'].includes(m)) applyLayout(m); });
   ipcMain.handle('rescanPacks', () => scanPacks());
   ipcMain.handle('lan', async (e, a) => {
@@ -475,37 +482,10 @@ app.whenReady().then(async () => {
         if (a.type === 'duelForfeit') return await lan.duelForfeit();
         if (a.type === 'duelClose') return lan.closeDuel();
         if (a.type === 'treeState') return await lan.treeState();
-        if (a.type === 'treeWater') {
-          const r = await lan.treeGive('water', 0);
-          if (r.ok) { G.gainExp(state, 5); r.msg += ' +5 EXP'; persist(); push(); }
-          return r;
-        }
-        if (a.type === 'treeFert') { // góp phân của mình cho cây chung
-          const it = C.ITEMS_BY_ID[a.item];
-          if (!it || !it.fert) return { ok: false, msg: 'Loại phân không hợp lệ.' };
-          if ((state.inventory.items[it.id] || 0) <= 0) return { ok: false, msg: `Bạn không có ${it.name}.` };
-          const r = await lan.treeGive('fert', it.fert);
-          if (r.ok) {
-            state.inventory.items[it.id] -= 1;
-            const exp = Math.max(1, Math.round(it.fert * C.RULES.fertExpPerMin));
-            G.gainExp(state, exp); r.msg += ` +${exp} EXP`; persist(); push();
-          }
-          return r;
-        }
-        if (a.type === 'treeClaimTop') {
-          const r = await lan.treeClaimTop();
-          if (!r.ok) return r;
-          const g3 = G.treeTopChest(state, r.rank);
-          persist(); push(); updateTray();
-          return g3;
-        }
-        if (a.type === 'treeClaim') {
-          const r = await lan.treeClaim(a.milestone);
-          if (!r.ok) return r;
-          const g2 = G.treeChest(state, r.milestone);
-          persist(); push(); updateTray();
-          return g2;
-        }
+        if (a.type === 'treeWater') return await lan.treeAction({ type: 'treeWater' });
+        if (a.type === 'treeFert') return await lan.treeAction({ type: 'treeFert', item: String(a.item || '') });
+        if (a.type === 'treeClaim') return await lan.treeAction({ type: 'treeClaim', milestone: Number(a.milestone) });
+        if (a.type === 'treeClaimTop') return await lan.treeAction({ type: 'treeClaimTop' });
         return { ok: false, msg: 'Hành động nhóm không hợp lệ.' };
       }
       if (a.type === 'host') return { ok: false, msg: 'Phòng LAN đã tắt, hãy dùng phòng Internet.' };
@@ -538,10 +518,11 @@ app.whenReady().then(async () => {
   });
 
   setInterval(tick, TICK_MS);
+  if (remote) { lastServerTick = Date.now(); serverTick(); }
   if (DEV) watchSource();
-  setInterval(() => { if (dirty) persist(); }, 60 * 1000);
+  setInterval(() => { if (dirty || cacheDirty) persist(); }, 60 * 1000);
 });
 
 app.on('second-instance', () => { if (win) { win.showInactive(); applyLayout('bar'); } });
-app.on('will-quit', () => { globalShortcut.unregisterAll(); if (state) persist(); });
+app.on('will-quit', () => { globalShortcut.unregisterAll(); if (state && !remote) persist(); else saveCache(); });
 app.on('window-all-closed', () => app.quit());

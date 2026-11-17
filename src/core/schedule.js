@@ -3,8 +3,9 @@
  * Giờ làm việc: vườn chỉ "chạy" (cây lớn, nước cạn) trong giờ làm.
  * Ngoài giờ (tối, cuối tuần, nghỉ trưa nếu bật) vườn "ngủ" → không cây nào chết khi bạn về nhà.
  *
- * Lịch tính theo giờ địa phương của máy.
+ * Lịch tính theo giờ địa phương của người chơi (xem clock.js: trên máy chủ dùng múi giờ người chơi gửi lên).
  */
+const CL = require('./clock');
 
 const DEFAULT_SCHEDULE = {
   start: '08:00',
@@ -40,14 +41,14 @@ function dayIntervals(schedule) {
   return [[s, e]];
 }
 
-function minuteOfDay(date) {
-  return date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+function minuteOfDay(ms) {
+  const p = CL.parts(ms);
+  return p.h * 60 + p.mi + p.s / 60;
 }
 
 function isWorkTime(ms, schedule = DEFAULT_SCHEDULE) {
-  const d = new Date(ms);
-  if (!schedule.workdays.includes(d.getDay())) return false;
-  const m = minuteOfDay(d);
+  if (!schedule.workdays.includes(CL.parts(ms).dow)) return false;
+  const m = minuteOfDay(ms);
   return dayIntervals(schedule).some(([a, b]) => m >= a && m < b);
 }
 
@@ -59,19 +60,16 @@ function workSpans(t0, t1, schedule = DEFAULT_SCHEDULE) {
   const spans = [];
   if (t1 <= t0) return spans;
   const intervals = dayIntervals(schedule);
-  const day = new Date(t0);
-  day.setHours(0, 0, 0, 0);
-  for (let guard = 0; day.getTime() <= t1 && guard < 4000; guard++) {
-    if (schedule.workdays.includes(day.getDay())) {
+  let day = CL.dayStart(t0);
+  for (let guard = 0; day <= t1 && guard < 4000; guard++) {
+    if (schedule.workdays.includes(CL.parts(day + CL.DAY / 2).dow)) {
       for (const [a, b] of intervals) {
-        const from = new Date(day); from.setHours(0, a, 0, 0);
-        const to = new Date(day); to.setHours(0, b, 0, 0);
-        const s = Math.max(from.getTime(), t0);
-        const e = Math.min(to.getTime(), t1);
+        const s = Math.max(day + a * MIN, t0);
+        const e = Math.min(day + b * MIN, t1);
         if (e > s) spans.push([s, e]);
       }
     }
-    day.setDate(day.getDate() + 1);
+    day = CL.nextDay(day);
   }
   return spans;
 }
@@ -94,16 +92,15 @@ function windowUsable(window, schedule = DEFAULT_SCHEDULE) {
 }
 
 function inWindow(ms, window) {
-  const m = minuteOfDay(new Date(ms));
+  const m = minuteOfDay(ms);
   return m >= toMin(window[0]) && m < toMin(window[1]);
 }
 
 /** Trạng thái hiển thị cho HUD: đang làm / nghỉ trưa / hết giờ, còn bao lâu. */
 function describeNow(ms, schedule = DEFAULT_SCHEDULE) {
-  const d = new Date(ms);
   const working = isWorkTime(ms, schedule);
-  const isWorkday = schedule.workdays.includes(d.getDay());
-  const m = minuteOfDay(d);
+  const isWorkday = schedule.workdays.includes(CL.parts(ms).dow);
+  const m = minuteOfDay(ms);
   const ints = dayIntervals(schedule);
   if (working) {
     const cur = ints.find(([a, b]) => m >= a && m < b);
