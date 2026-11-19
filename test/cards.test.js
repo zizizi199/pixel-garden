@@ -83,3 +83,25 @@ test('Bàn bài: rời bàn giữa ván thì máy đánh hộ, hết ván mới 
   R.settled(room);
   assert.deepEqual(room.seats.map((s) => s.id), ['a', 'c']);
 });
+
+test('Poker: xếp hạng bài, pot phụ khi tất tay, tổng chip luôn cân', () => {
+  const PK = require('../src/core/cards/poker');
+  assert.equal(PK.bestHand([c('A', '♠'), c('2', '♠'), c('3', '♠'), c('4', '♠'), c('5', '♠'), c('K', '♥'), c('K', '♦')]).name, 'Thùng phá sảnh');
+  assert.equal(PK.bestHand([c('9', '♠'), c('9', '♦'), c('9', '♥'), c('4', '♠'), c('4', '♣'), c('K', '♥'), c('2', '♦')]).name, 'Cù lũ');
+  assert.ok(PK.cmp(PK.eval5([c('A', '♠'), c('A', '♦'), c('K', '♥'), c('7', '♠'), c('3', '♣')]), PK.eval5([c('A', '♣'), c('A', '♥'), c('Q', '♥'), c('J', '♠'), c('10', '♣')])) > 0);
+  const rng = seeded(11);
+  for (let k = 0; k < 2000; k++) {
+    const n = 2 + (k % 5);
+    const g = PK.deal(n, D.shuffled(rng), { leader: k % n, stake: 20 });
+    let guard = 0;
+    while (!g.pub.over && guard++ < 300) {
+      const s = g.pub.turn; const p = g.pub; const x = rng(); const toCall = p.maxBet - p.bets[s];
+      const mv = x < 0.1 ? { kind: 'fold' } : x < 0.2 ? { kind: 'allin' } : x < 0.4 ? { kind: 'raise', to: p.maxBet + p.minRaise } : toCall > 0 ? { kind: 'call' } : { kind: 'check' };
+      // tố khi không đủ chip để tố thì bị từ chối hợp lệ → theo / xem
+      if (!PK.move(g, s, mv).ok) assert.ok(PK.move(g, s, toCall > 0 ? { kind: 'call' } : { kind: 'check' }).ok);
+    }
+    assert.ok(g.pub.over);
+    assert.equal(g.pub.net.reduce((a, b) => a + b, 0), 0);
+    assert.ok(g.pub.stacks.every((x) => x >= 0));
+  }
+});

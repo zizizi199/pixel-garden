@@ -461,7 +461,7 @@
     root.innerHTML = '';
     root.className = `ct ${T.game}`;
     const top = document.createElement('div'); top.className = 'ct-top';
-    top.innerHTML = `<b>🃏 ${GAME_NAME[T.game]}</b> · ${T.stake} xu/ván${T.hand ? ` · ván ${T.hand}` : ''}`;
+    top.innerHTML = `<b>🃏 ${GAME_NAME[T.game]}</b> · ${T.game === 'poker' ? `big blind ${T.stake} xu` : `${T.stake} xu/ván`}${T.hand ? ` · ván ${T.hand}` : ''}`;
     const mini = document.createElement('button'); mini.className = 'ct-min'; mini.textContent = '▾'; mini.title = 'Thu nhỏ (bàn vẫn chơi tiếp)';
     mini.onclick = ctx.minimize;
     top.appendChild(mini);

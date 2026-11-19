@@ -921,3 +921,54 @@ body.bugging #slots { pointer-events: none; }
 #card-invite button { font-size: 11.5px; padding: 1px 8px; }
 .card-form select, .card-form input { font-size: 12px; }
 .cf-inv { margin-right: 8px; } .cf-inv small { opacity: .6; }
+
+/* bàn bài: 5–6 ghế (Poker) */
+.ct-seat.topleft { top: 24px; left: 22%; transform: translateX(-50%); }
+.ct-seat.topright { top: 24px; left: 82%; transform: translateX(-50%); }
+.ct.poker .ct-seat.top { left: 36%; }
+.ct.poker .ct-mid { left: 59%; top: 57%; }
+/* xếp bài */
+.ct-ctl { flex-wrap: wrap; max-width: 560px; }
+.ct-sort { flex-basis: 100%; display: flex; gap: 4px; align-items: center; }
+.ct-sort button { font-size: 10.5px; padding: 0 6px; }
+.ct-tip { font-size: 10.5px; opacity: .8; margin-left: 4px; }
+.ct-hand .pc.dragging { opacity: .35; }
+.ct-hand .pc.drop { box-shadow: -4px 0 0 #ffd23f, 0 2px 0 rgba(0, 0, 0, .35); }
+.ct-hand .pc.meld::before { content: ''; position: absolute; left: 2px; right: 2px; bottom: 2px; height: 5px; border-radius: 2px; }
+.ct-hand .pc.m0::before { background: #2a9d8f; } .ct-hand .pc.m1::before { background: #e76f51; }
+.ct-hand .pc.m2::before { background: #7b2cbf; } .ct-hand .pc.m3::before { background: #f4a261; }
+/* Poker */
+.ct-dealer { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%; background: #fff; color: #222; font-weight: 900; font-size: 11px;
+  display: grid; place-items: center; box-shadow: 0 1px 0 #0006; }
+.ct-seat.bottom .ct-dealer { top: 6px; right: auto; left: 150px; }
+.ct-bet { display: flex; align-items: center; gap: 3px; font-weight: 700; font-size: 11px; color: #ffe58a; }
+.ct-seat.bottom .ct-bet { position: absolute; left: 12px; top: 52px; }
+.ct-bet i, .ct-pot i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(#fff 0 25%, #e63946 26% 60%, #fff 61% 68%, #e63946 69%); }
+.ct-fan.poker { display: flex; flex-direction: row; padding-left: 0; }
+.ct-fan.poker .pc { margin-left: 0; } .ct-fan.poker .pc + .pc { margin-left: -10px; }
+.ct-fan.folded { opacity: .3; filter: grayscale(1); }
+.ct-board { display: flex; flex-direction: row; gap: 4px; }
+.pc.slot { background: rgba(255, 255, 255, .08); border: 1.5px dashed rgba(255, 255, 255, .35); box-shadow: none; }
+.ct-pot { font-size: 12px; padding: 2px 10px; background: rgba(0, 0, 0, .28); border-radius: 10px; display: flex; align-items: center; gap: 4px; }
+.pc.flip { animation: ct-flip .45s ease-out backwards; }
+@keyframes ct-flip { from { transform: rotateY(90deg) translateY(-20px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ct-chip { position: absolute; z-index: 22; width: 16px; height: 16px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(#fff 0 25%, #e63946 26% 60%, #fff 61% 68%, #e63946 69%); box-shadow: 0 1px 0 #0006; animation: ct-chip .6s ease-in backwards; }
+@keyframes ct-chip { from { transform: translate(var(--fx), var(--fy)); opacity: 1; } 85% { opacity: 1; } to { transform: none; opacity: 0; } }
+.ct-raise { display: flex; align-items: center; gap: 4px; }
+.ct-raise input[type=range] { width: 130px; }
+.ct-raise b { min-width: 52px; color: #ffe58a; }
+.ct-raise button { font-size: 10.5px; padding: 0 6px; color: #222; }
+.ct-ctl button.fold { background: #ffd6d6; } .ct-ctl button.allin { background: #ff9f9f; font-weight: 700; }
+.ct-handname { position: absolute; top: -4px; left: 24px; font-size: 11px; font-weight: 700; color: #ffe58a; text-shadow: 0 1px 0 #000a; }
+.ct-hand { position: relative; }
+/* kết quả: bài từng người – xếp hàng ngang, lá đè lên nhau cho gọn */
+.ct-result { min-width: 640px; max-width: 96%; }
+.ct-res { grid-template-columns: 64px 140px 96px 1fr; }
+.ct-res small { grid-column: 2 / 4; }
+.ct-res-cards { grid-column: 4; grid-row: 1 / span 2; display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; }
+.ct-res-cards em { font-size: 11px; opacity: .85; white-space: nowrap; }
+.ct-mini { display: inline-flex; flex-direction: row; flex-wrap: nowrap; align-items: center; }
+.ct-mini .pc { flex: none; } .ct-mini .pc + .pc { margin-left: -12px; }
+.ct-mini.meld { padding: 1px 3px; border-radius: 4px; background: rgba(42, 157, 143, .5); }
+.ct-res-board { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 11px; margin-bottom: 2px; }
